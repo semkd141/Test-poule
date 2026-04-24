@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>⚽ WK 2026 Poule</title>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{background:#0d0d0d;color:#f0f0f0;font-family:'Inter',sans-serif;}
+    input,select{outline:none;font-family:'Inter',sans-serif;}
+    button{font-family:'Inter',sans-serif;cursor:pointer;}
+    .bebas{font-family:'Bebas Neue',sans-serif;}
+    ::-webkit-scrollbar{width:4px;}
+    ::-webkit-scrollbar-track{background:#111;}
+    ::-webkit-scrollbar-thumb{background:#FF6B00;border-radius:2px;}
+    select option{background:#1a1a1a;color:#fff;}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+const SUPABASE_URL = "https://ucqimrpcndzepgofwdvt.supabase.co";
+const SUPABASE_KEY = "sb_publishable_aZOBdvvKzklrnnq4-b2c7A_MfPRjYV8";
+const ADMIN_WACHTWOORD = "poule2026";
+const INSCHRIJF_DEADLINE = new Date("2026-06-10T23:59:00");
+const ORANJE = "#FF6B00";
+
+const WK_LANDEN = ["Argentinie","Australie","Belgie","Bolivia","Brazilie","Canada","Chili","Colombia","Costa Rica","Ecuador","Egypte","El Salvador","Frankrijk","Ghana","Honduras","Ierland","Iran","Japan","Kameroen","Kroatie","Marokko","Mexico","Nederland","New Zealand","Nigeria","Oekraine","Panama","Paraguay","Peru","Polen","Portugal","Qatar","Roemenie","Saudi-Arabie","Senegal","Servie","Slovenie","Spanje","Turkije","Uruguay","USA","Venezuela","Zuid-Afrika","Zuid-Korea","Zwitserland","Engeland","Duitsland","Italie"].sort();
+
+const DB = `${SUPABASE_URL}/rest/v1`;
+const HDR = {"Content-Type":"application/json","apikey":SUPABASE_KEY,"Authorization":`Bearer ${SUPABASE_KEY}`};
+
+async function dbLees(tabel){try{const r=await fetch(`${DB}/${tabel}?select=*&order=id`,{headers:HDR});if(!r.ok)return[];return await r.json();}catch(e){return[];}}
+async function dbToevoegen(tabel,data){const r=await fetch(`${DB}/${tabel}`,{method:"POST",headers:{...HDR,"Prefer":"return=representation"},body:JSON.stringify(data)});const d=await r.json();return Array.isArray(d)?d[0]:d;}
+async function dbBijwerken(tabel,id,data){await fetch(`${DB}/${tabel}?id=eq.${id}`,{method:"PATCH",headers:{...HDR,"Prefer":"return=representation"},body:JSON.stringify(data)});}
+async function dbVerwijderen(tabel,id){await fetch(`${DB}/${tabel}?id=eq.${id}`,{method:"DELETE",headers:HDR});}
+
+const POINTS={doelman:{winst:3,gelijk:1,scoort:10,assist:5,houdt_nul:3,eigen_goal:-3,geel:-1,rood2x:-2,direct_rood:-4,stopt_pingel:3,wissel:0,kampioen:3},verdediger:{winst:3,gelijk:1,scoort:5,assist:4,houdt_nul:1,eigen_goal:-3,geel:-1,rood2x:-2,direct_rood:-4,stopt_pingel:0,wissel:0,kampioen:3},middenvelder:{winst:3,gelijk:1,scoort:4,assist:3,houdt_nul:0,eigen_goal:-3,geel:-1,rood2x:-2,direct_rood:-4,stopt_pingel:0,wissel:0,kampioen:3},aanvaller:{winst:3,gelijk:1,scoort:3,assist:2,houdt_nul:0,eigen_goal:-3,geel:-1,rood2x:-2,direct_rood:-4,stopt_pingel:0,wissel:0,kampioen:2},coach:{winst:3,gelijk:1,geel:-1,rood2x:-2,direct_rood:-4,wissel:1,kampioen:1}};
+const STATS=["winst","gelijk","scoort","assist","houdt_nul","eigen_goal","geel","rood2x","direct_rood","stopt_pingel","wissel","kampioen"];
+const STAT_LABELS={winst:"Winst",gelijk:"Gelijkspel",scoort:"Goal",assist:"Assist",houdt_nul:"Nul gehouden",eigen_goal:"Eigen goal",geel:"Gele kaart",rood2x:"2x Geel-Rood",direct_rood:"Direct rood",stopt_pingel:"Pingel gestopt",wissel:"Ingevallen",kampioen:"Kampioen"};
+const POS_COLOR={doelman:"#f59e0b",verdediger:"#3b82f6",middenvelder:"#8b5cf6",aanvaller:"#ef4444",coach:ORANJE};
+const SYSTEMEN={"1-4-3-3":{doelman:1,verdediger:4,middenvelder:3,aanvaller:3},"1-4-4-2":{doelman:1,verdediger:4,middenvelder:4,aanvaller:2},"1-3-4-3":{doelman:1,verdediger:3,middenvelder:4,aanvaller:3}};
+
+function maakSpelers(sys){const s=SYSTEMEN[sys]||SYSTEMEN["1-4-3-3"];const lijst=[];["doelman","verdediger","middenvelder","aanvaller"].forEach(pos=>{for(let i=0;i<s[pos];i++)lijst.push({positie:pos,naam:"",land:"",stats:{}});});lijst.push({positie:"coach",naam:"",land:"",stats:{}});return lijst;}
+function calcPoints(speler){const schema=POINTS[speler.positie];if(!schema)return 0;return STATS.reduce((sum,stat)=>{const val=(speler.stats&&speler.stats[stat])||0;const pt=schema[stat];return typeof pt==="number"?sum+val*pt:sum;},0);}
+function calcTotal(d){return(d.spelers||[]).reduce((sum,s)=>sum+calcPoints(s),0);}
+function deadlineVerstreken(){return new Date()>INSCHRIJF_DEADLINE;}
+function formatDeadline(){return INSCHRIJF_DEADLINE.toLocaleDateString("nl-NL",{day:"numeric",month:"long",year:"numeric"})+" om "+INSCHRIJF_DEADLINE.toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"});}
+
+function exportCSV(deelnemers){const sorted=[...deelnemers].sort((a,b)=>calcTotal(b)-calcTotal(a));const rows=[["Rang","Naam","Team","Email","Systeem","Punten","Spelers"]];sorted.forEach((d,i)=>rows.push([i+1,d.naam,d.teamnaam||"",d.email||"",d.systeem||"",calcTotal(d),(d.spelers||[]).map(s=>`${s.positie}: ${s.naam} (${s.land}) ${calcPoints(s)}pt`).join(" | ")]));const csv=rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(",")).join("\n");const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download="WK2026_Poule.csv";a.click();URL.revokeObjectURL(url);}
+
+const IS={background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:8,padding:"10px 12px",color:"#fff",fontSize:14,width:"100%"};
+const BG={background:ORANJE,color:"#fff",border:"none",borderRadius:8,padding:"11px 22px",fontWeight:700,fontSize:14};
+const BX={background:"#1a1a1a",color:"#aaa",border:"1px solid #2a2a2a",borderRadius:8,padding:"9px 14px",fontSize:13};
+const BS={background:"#222",border:"1px solid #333",color:"#aaa",borderRadius:6,width:28,height:28,fontSize:18,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0};
+
+function PosBadge({positie}){return <span style={{fontSize:9,fontWeight:700,letterSpacing:1,textTransform:"uppercase",color:POS_COLOR[positie]||"#aaa",background:"rgba(0,0,0,0.4)",border:`1px solid ${POS_COLOR[positie]||"#333"}`,borderRadius:4,padding:"2px 7px",flexShrink:0,whiteSpace:"nowrap"}}>{positie}</span>;}
+
+function StatEditor({speler,onChange}){const schema=POINTS[speler.positie];if(!schema)return null;return(<div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginTop:8}}>{STATS.filter(s=>typeof schema[s]==="number").map(stat=>(<div key={stat} style={{background:"#111",borderRadius:6,padding:"6px 8px",border:"1px solid #222"}}><div style={{fontSize:9,color:"#666",marginBottom:3}}>{STAT_LABELS[stat]} <span style={{color:schema[stat]>0?"#4ade80":"#ef4444"}}>({schema[stat]>0?"+":""}{schema[stat]})</span></div><div style={{display:"flex",alignItems:"center",gap:6}}><button onClick={()=>onChange(stat,Math.max(0,((speler.stats&&speler.stats[stat])||0)-1))} style={BS}>-</button><span style={{color:"#fff",fontWeight:700,minWidth:22,textAlign:"center"}}>{(speler.stats&&speler.stats[stat])||0}</span><button onClick={()=>onChange(stat,((speler.stats&&speler.stats[stat])||0)+1)} style={BS}>+</button></div></div>))}</div>);}
+
+function Inschrijfformulier({onInschrijven}){
+  const [form,setForm]=useState({naam:"",teamnaam:"",email:"",systeem:"1-4-3-3",spelers:maakSpelers("1-4-3-3")});
+  const [stap,setStap]=useState(1);const [bezig,setBezig]=useState(false);const [fout,setFout]=useState("");
+  function setSys(sys){setForm({...form,systeem:sys,spelers:maakSpelers(sys)});}
+  function setSpeler(si,f,v){const sp=[...form.spelers];sp[si]={...sp[si],[f]:v};setForm({...form,spelers:sp});}
+  const gebruikteLanden=form.spelers.filter(s=>s.land).map(s=>s.land);
+  async function versturen(){
+    const lege=form.spelers.filter(s=>!s.naam.trim()||!s.land.trim());
+    if(lege.length>0){setFout("Vul alle spelers en landen in.");return;}
+    const landen=form.spelers.map(s=>s.land);const uniek=new Set(landen);
+    if(uniek.size!==landen.length){setFout("Je hebt een land dubbel gebruikt!");return;}
+    setBezig(true);setFout("");
+    try{const nieuw=await dbToevoegen("deelnemers",{naam:form.naam,teamnaam:form.teamnaam,email:form.email,systeem:form.systeem,spelers:JSON.stringify(form.spelers)});
+    if(nieuw&&nieuw.id){setStap(3);onInschrijven();}else{setFout("Er ging iets mis. Probeer opnieuw.");}}
+    catch(e){setFout("Verbindingsfout. Probeer opnieuw.");}setBezig(false);
+  }
+  if(deadlineVerstreken())return(<div style={{textAlign:"center",padding:60}}><div style={{fontSize:48,marginBottom:16}}>🔒</div><div className="bebas" style={{fontSize:28,color:ORANJE,marginBottom:8}}>Inschrijving gesloten</div><div style={{color:"#666",fontSize:14}}>De deadline was {formatDeadline()}</div></div>);
+  if(stap===3)return(<div style={{textAlign:"center",padding:60}}><div style={{fontSize:56,marginBottom:16}}>🎉</div><div className="bebas" style={{fontSize:32,color:ORANJE,marginBottom:8}}>Ingeschreven!</div><div style={{color:"#aaa",fontSize:14}}>Succes {form.naam}! Je team staat klaar.</div></div>);
+  return(
+    <div style={{maxWidth:600,margin:"0 auto"}}>
+      <div style={{display:"flex",gap:0,marginBottom:28,borderRadius:10,overflow:"hidden",border:"1px solid #222"}}>
+        {["1. Jouw gegevens","2. Spelers kiezen"].map((label,i)=>(<div key={i} style={{flex:1,padding:"12px 0",textAlign:"center",fontSize:13,fontWeight:700,background:stap===i+1?ORANJE:"#111",color:stap===i+1?"#fff":"#444",borderRight:i===0?"1px solid #222":"none"}}>{label}</div>))}
+      </div>
+      {stap===1&&(<div>
+        <div style={{marginBottom:20,padding:14,background:"#1a1a1a",borderRadius:10,border:`1px solid ${ORANJE}33`,fontSize:13,color:"#aaa"}}>Inschrijving sluit op <strong style={{color:ORANJE}}>{formatDeadline()}</strong></div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+          <div><div style={{fontSize:12,color:"#666",marginBottom:5}}>Jouw naam *</div><input placeholder="Jan Janssen" value={form.naam} onChange={e=>setForm({...form,naam:e.target.value})} style={IS}/></div>
+          <div><div style={{fontSize:12,color:"#666",marginBottom:5}}>Team naam *</div><input placeholder="De Oranjeboys" value={form.teamnaam} onChange={e=>setForm({...form,teamnaam:e.target.value})} style={IS}/></div>
+        </div>
+        <div style={{marginBottom:20}}><div style={{fontSize:12,color:"#666",marginBottom:5}}>E-mail *</div><input placeholder="jouw@email.nl" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} style={IS}/></div>
+        <div style={{marginBottom:10}}>
+          <div style={{fontSize:12,color:"#666",marginBottom:10}}>Kies spelsysteem *</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+            {Object.keys(SYSTEMEN).map(sys=>(<button key={sys} onClick={()=>setSys(sys)} style={{padding:"14px 0",border:`2px solid ${form.systeem===sys?ORANJE:"#222"}`,background:form.systeem===sys?`${ORANJE}22`:"#111",color:form.systeem===sys?ORANJE:"#555",borderRadius:10,fontWeight:800,fontSize:17}}>{sys}</button>))}
+          </div>
+          <div style={{fontSize:12,color:"#555",marginTop:8}}>{Object.entries(SYSTEMEN[form.systeem]).map(([k,v])=>`${v} ${k}`).join(" + ")} + 1 coach</div>
+        </div>
+        <button onClick={()=>{if(!form.naam.trim()||!form.teamnaam.trim()||!form.email.trim()){setFout("Vul alle velden in.");return;}setFout("");setStap(2);}} style={{...BG,width:"100%",marginTop:16,padding:"13px 0",fontSize:15}}>Volgende - Spelers kiezen</button>
+        {fout&&<div style={{color:"#ef4444",fontSize:13,marginTop:10,textAlign:"center"}}>{fout}</div>}
+      </div>)}
+      {stap===2&&(<div>
+        <div style={{marginBottom:16,padding:12,background:"#1a1a1a",borderRadius:8,border:"1px solid #222",fontSize:13,color:"#aaa"}}>Kies <strong style={{color:"#fff"}}>1 speler per land</strong>. Elk land mag maar 1x voorkomen.</div>
+        {form.spelers.map((s,si)=>(<div key={si} style={{marginBottom:10,background:"#111",border:"1px solid #1e1e1e",borderRadius:10,padding:12}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><PosBadge positie={s.positie}/><span style={{fontSize:12,color:"#555"}}>Selectie {si+1}</span></div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            <div><div style={{fontSize:11,color:"#555",marginBottom:4}}>Land</div>
+              <select value={s.land} onChange={e=>setSpeler(si,"land",e.target.value)} style={{...IS,fontSize:13}}>
+                <option value="">Kies land...</option>
+                {WK_LANDEN.map(l=>(<option key={l} value={l} disabled={gebruikteLanden.includes(l)&&s.land!==l}>{gebruikteLanden.includes(l)&&s.land!==l?"(bezet) ":""}{l}</option>))}
+              </select>
+            </div>
+            <div><div style={{fontSize:11,color:"#555",marginBottom:4}}>{s.positie==="coach"?"Coach naam":"Spelernaam"}</div><input placeholder={s.positie==="coach"?"bijv. Koeman":"bijv. Van Dijk"} value={s.naam} onChange={e=>setSpeler(si,"naam",e.target.value)} style={IS}/></div>
+          </div>
+        </div>))}
+        {fout&&<div style={{color:"#ef4444",fontSize:13,marginTop:8,marginBottom:8,textAlign:"center",padding:"10px",background:"#ef444422",borderRadius:8}}>{fout}</div>}
+        <div style={{display:"flex",gap:8,marginTop:16}}>
+          <button onClick={()=>{setFout("");setStap(1);}} style={{...BX,flexShrink:0}}>Terug</button>
+          <button onClick={versturen} disabled={bezig} style={{...BG,flex:1,padding:"13px 0",fontSize:15,opacity:bezig?0.7:1}}>{bezig?"Bezig...":"Team inschrijven"}</button>
+        </div>
+      </div>)}
+    </div>
+  );
+}
+
+function App(){
+  const [tab,setTab]=useState("ranglijst");
+  const [deelnemers,setDeelnemers]=useState([]);
+  const [laden,setLaden]=useState(true);
+  const [opslaan,setOpslaan]=useState(false);
+  const [isAdmin,setIsAdmin]=useState(false);
+  const [toonLogin,setToonLogin]=useState(false);
+  const [wachtwoord,setWachtwoord]=useState("");
+  const [loginFout,setLoginFout]=useState(false);
+  const [editId,setEditId]=useState(null);
+  const [editForm,setEditForm]=useState(null);
+  const [expandId,setExpandId]=useState(null);
+
+  useEffect(()=>{laadData();},[]);
+
+  async function laadData(){setLaden(true);const data=await dbLees("deelnemers");setDeelnemers(data.map(d=>({...d,spelers:typeof d.spelers==="string"?JSON.parse(d.spelers):(d.spelers||[])})));setLaden(false);}
+  function login(){if(wachtwoord===ADMIN_WACHTWOORD){setIsAdmin(true);setToonLogin(false);setLoginFout(false);setWachtwoord("");}else{setLoginFout(true);}}
+  async function deleteDeelnemer(id){if(!window.confirm("Verwijderen?"))return;await dbVerwijderen("deelnemers",id);setDeelnemers(prev=>prev.filter(d=>d.id!==id));}
+  function startEdit(d){setEditForm(JSON.parse(JSON.stringify(d)));setEditId(d.id);}
+  async function saveEdit(){setOpslaan(true);await dbBijwerken("deelnemers",editId,{...editForm,spelers:JSON.stringify(editForm.spelers)});setDeelnemers(prev=>prev.map(d=>d.id===editId?{...editForm}:d));setEditId(null);setEditForm(null);setOpslaan(false);}
+  function updSpeler(si,f,v){const u=JSON.parse(JSON.stringify(editForm));u.spelers[si][f]=v;setEditForm(u);}
+  function updStat(si,stat,val){const u=JSON.parse(JSON.stringify(editForm));if(!u.spelers[si].stats)u.spelers[si].stats={};u.spelers[si].stats[stat]=val;setEditForm(u);}
+  function editSys(sys){const u=JSON.parse(JSON.stringify(editForm));u.systeem=sys;u.spelers=maakSpelers(sys);setEditForm(u);}
+
+  const sorted=[...deelnemers].sort((a,b)=>calcTotal(b)-calcTotal(a));
+  function groep(spelers){const g={};(spelers||[]).forEach(s=>{if(!g[s.positie])g[s.positie]=[];g[s.positie].push(s);});return g;}
+
+  const TABS=[["ranglijst","Ranglijst"],["deelnemers","Teams"],["inschrijven","Inschrijven"],...(isAdmin?[["beheer","Beheer"]]:[])];
+
+  return(
+    <div style={{minHeight:"100vh",background:"#0d0d0d"}}>
+      {toonLogin&&(<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center"}}>
+        <div style={{background:"#111",border:`1px solid ${ORANJE}44`,borderRadius:16,padding:32,width:320}}>
+          <div className="bebas" style={{fontSize:26,marginBottom:4,color:ORANJE}}>Beheerder Login</div>
+          <div style={{fontSize:13,color:"#555",marginBottom:20}}>Alleen voor de poule-beheerder</div>
+          <input type="password" placeholder="Wachtwoord" value={wachtwoord} onChange={e=>{setWachtwoord(e.target.value);setLoginFout(false);}} onKeyDown={e=>e.key==="Enter"&&login()} style={{...IS,marginBottom:8}}/>
+          {loginFout&&<div style={{color:"#ef4444",fontSize:13,marginBottom:10}}>Verkeerd wachtwoord</div>}
+          <div style={{display:"flex",gap:8,marginTop:4}}>
+            <button onClick={login} style={{...BG,flex:1}}>Inloggen</button>
+            <button onClick={()=>{setToonLogin(false);setWachtwoord("");setLoginFout(false);}} style={BX}>Annuleer</button>
+          </div>
+        </div>
+      </div>)}
+
+      <div style={{background:"linear-gradient(135deg,#1a0a00 0%,#0d0d0d 60%)",borderBottom:`1px solid ${ORANJE}33`,padding:"0 20px",position:"sticky",top:0,zIndex:10}}>
+        <div style={{maxWidth:900,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 0"}}>
+          <div style={{display:"flex",alignItems:"center",gap:14}}>
+            <div style={{fontSize:36}}>⚽</div>
+            <div>
+              <div className="bebas" style={{fontSize:28,letterSpacing:2,color:ORANJE,lineHeight:1}}>WK 2026 POULE</div>
+              <div style={{fontSize:11,color:"#555",letterSpacing:3}}>{deelnemers.length} DEELNEMERS</div>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            {isAdmin&&<button onClick={()=>exportCSV(deelnemers)} style={{...BG,padding:"8px 14px",fontSize:12}}>Excel</button>}
+            {isAdmin?<button onClick={()=>{setIsAdmin(false);setTab("ranglijst");}} style={{...BX,color:"#ef4444",fontSize:12}}>Uitloggen</button>:<button onClick={()=>setToonLogin(true)} style={{...BX,fontSize:12}}>Beheer</button>}
+          </div>
+        </div>
+        <div style={{display:"flex",maxWidth:900,margin:"0 auto"}}>
+          {TABS.map(([key,label])=>(<button key={key} onClick={()=>setTab(key)} style={{padding:"12px 20px",border:"none",background:"none",color:tab===key?ORANJE:"#555",fontWeight:tab===key?700:400,borderBottom:tab===key?`3px solid ${ORANJE}`:"3px solid transparent",fontSize:13,whiteSpace:"nowrap"}}>{label}</button>))}
+        </div>
+      </div>
+
+      {laden&&<div style={{textAlign:"center",padding:80,color:"#333",letterSpacing:3}}>LADEN...</div>}
+
+      {!laden&&<div style={{maxWidth:900,margin:"0 auto",padding:"24px 16px"}}>
+
+        {tab==="ranglijst"&&(<div>
+          {sorted.length>=3&&(<div style={{display:"grid",gridTemplateColumns:"1fr 1.1fr 1fr",gap:8,marginBottom:24}}>
+            {[sorted[1],sorted[0],sorted[2]].map((d,i)=>{const rank=[2,1,3][i];const medal=rank===1?"🥇":rank===2?"🥈":"🥉";return(<div key={d.id} style={{background:rank===1?`linear-gradient(135deg,${ORANJE}22,#1a1a1a)`:"#111",border:`1px solid ${rank===1?ORANJE:"#1e1e1e"}`,borderRadius:12,padding:"16px 12px",textAlign:"center",alignSelf:"end"}}>
+              <div style={{fontSize:rank===1?36:28,marginBottom:4}}>{medal}</div>
+              <div style={{fontWeight:700,fontSize:rank===1?15:13,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.naam}</div>
+              <div style={{fontSize:11,color:"#555",marginBottom:6}}>{d.teamnaam||"-"}</div>
+              <div className="bebas" style={{fontSize:rank===1?32:24,color:rank===1?ORANJE:"#fff",letterSpacing:1}}>{calcTotal(d)}</div>
+              <div style={{fontSize:10,color:"#444",letterSpacing:2}}>PUNTEN</div>
+            </div>);})}
+          </div>)}
+          <div style={{marginBottom:10,fontSize:11,color:"#444",letterSpacing:3}}>VOLLEDIGE RANGLIJST</div>
+          {sorted.map((d,i)=>{const pts=calcTotal(d);const open=expandId===d.id;const mc=i===0?"#FFD700":i===1?"#C0C0C0":i===2?"#CD7F32":"#1e1e1e";const gr=groep(d.spelers);return(<div key={d.id} style={{marginBottom:6,border:`1px solid ${open?ORANJE+"44":"#1e1e1e"}`,borderRadius:12,overflow:"hidden",background:"#111"}}>
+            <div onClick={()=>setExpandId(open?null:d.id)} style={{display:"flex",alignItems:"center",gap:12,padding:"13px 16px",cursor:"pointer"}}>
+              <div style={{width:32,height:32,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",background:mc,color:i<3?"#000":"#666",fontWeight:800,fontSize:13,flexShrink:0}}>{i+1}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:700,fontSize:15,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{d.naam}</div>
+                <div style={{fontSize:11,color:"#555"}}>{d.teamnaam||"-"} - <span style={{color:ORANJE}}>{d.systeem}</span></div>
+              </div>
+              <div style={{textAlign:"right",flexShrink:0,marginRight:8}}>
+                <div className="bebas" style={{fontSize:24,color:i===0?ORANJE:"#fff",letterSpacing:1}}>{pts}</div>
+                <div style={{fontSize:9,color:"#444",letterSpacing:2}}>PUNTEN</div>
+              </div>
+              <div style={{color:"#333",fontSize:11}}>{open?"▲":"▼"}</div>
+            </div>
+            {open&&(<div style={{borderTop:"1px solid #1a1a1a",padding:"14px 16px",background:"#0d0d0d"}}>
+              {["doelman","verdediger","middenvelder","aanvaller","coach"].map(pos=>{const sp=gr[pos];if(!sp||!sp.length)return null;return(<div key={pos} style={{marginBottom:10}}>
+                <div style={{fontSize:10,color:POS_COLOR[pos],textTransform:"uppercase",letterSpacing:2,marginBottom:6,fontWeight:700}}>{pos}</div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(120px,1fr))",gap:6}}>
+                  {sp.map((s,si)=>(<div key={si} style={{background:"#111",borderRadius:8,padding:"8px 10px",border:"1px solid #1a1a1a"}}>
+                    <div style={{fontWeight:600,fontSize:13}}>{s.naam||"-"}</div>
+                    <div style={{fontSize:11,color:"#444",marginBottom:4}}>{s.land||""}</div>
+                    <div className="bebas" style={{fontSize:18,color:ORANJE,letterSpacing:1}}>{calcPoints(s)} pt</div>
+                  </div>))}
+                </div>
+              </div>);})}
+            </div>)}
+          </div>);})}
+          {sorted.length===0&&<div style={{color:"#333",textAlign:"center",padding:60}}>Nog geen deelnemers ingeschreven.</div>}
+        </div>)}
+
+        {tab==="deelnemers"&&(<div>
+          <div style={{marginBottom:16,fontSize:11,color:"#444",letterSpacing:3}}>{deelnemers.length} TEAMS INGESCHREVEN</div>
+          {deelnemers.map(d=>(<div key={d.id} style={{marginBottom:8,border:"1px solid #1e1e1e",borderRadius:12,background:"#111",padding:"13px 16px",display:"flex",alignItems:"center",gap:10}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:700,fontSize:15}}>{d.naam}</div>
+              <div style={{fontSize:12,color:"#555"}}>{d.teamnaam||"-"} - <span style={{color:ORANJE}}>{d.systeem}</span></div>
+              <div style={{fontSize:11,color:"#333",marginTop:3}}>{(d.spelers||[]).filter(s=>s.naam).map(s=>`${s.naam} (${s.land})`).join(", ")||"Geen spelers"}</div>
+            </div>
+            <div className="bebas" style={{fontSize:22,color:ORANJE,flexShrink:0}}>{calcTotal(d)} pt</div>
+          </div>))}
+          {deelnemers.length===0&&<div style={{color:"#333",textAlign:"center",padding:60}}>Nog geen teams.</div>}
+        </div>)}
+
+        {tab==="inschrijven"&&(<div>
+          <div style={{marginBottom:24,textAlign:"center"}}>
+            <div className="bebas" style={{fontSize:32,color:ORANJE,letterSpacing:2,marginBottom:4}}>Schrijf je in!</div>
+            <div style={{fontSize:14,color:"#555"}}>Stel je droomteam samen voor WK 2026</div>
+          </div>
+          <Inschrijfformulier onInschrijven={laadData}/>
+        </div>)}
+
+        {tab==="beheer"&&isAdmin&&(<div>
+          <div style={{marginBottom:20,padding:16,background:"#1a0a00",border:`1px solid ${ORANJE}44`,borderRadius:12}}>
+            <div className="bebas" style={{fontSize:20,color:ORANJE,marginBottom:4}}>Beheerderspaneel</div>
+            <div style={{fontSize:13,color:"#666"}}>Beheer deelnemers en voer punten in.</div>
+          </div>
+          {deelnemers.map(d=>(<div key={d.id} style={{marginBottom:10,border:"1px solid #1e1e1e",borderRadius:12,overflow:"hidden",background:"#111"}}>
+            {editId===d.id?(<div style={{padding:18}}>
+              <div style={{fontWeight:700,fontSize:15,marginBottom:14,color:ORANJE}}>Bewerken: {d.naam}</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+                {[["naam","Naam"],["teamnaam","Team naam"],["email","E-mail"]].map(([f,ph])=>(<div key={f}><div style={{fontSize:11,color:"#555",marginBottom:4}}>{ph}</div><input value={editForm[f]||""} onChange={e=>setEditForm({...editForm,[f]:e.target.value})} style={IS}/></div>))}
+              </div>
+              <div style={{marginBottom:14}}>
+                <div style={{fontSize:11,color:"#555",marginBottom:8}}>Spelsysteem</div>
+                <div style={{display:"flex",gap:8}}>{Object.keys(SYSTEMEN).map(sys=>(<button key={sys} onClick={()=>editSys(sys)} style={{flex:1,padding:"10px 0",border:`2px solid ${editForm.systeem===sys?ORANJE:"#222"}`,background:editForm.systeem===sys?`${ORANJE}22`:"#0d0d0d",color:editForm.systeem===sys?ORANJE:"#555",borderRadius:8,fontWeight:700,fontSize:15}}>{sys}</button>))}</div>
+              </div>
+              {editForm.spelers.map((s,si)=>(<div key={si} style={{marginBottom:10,background:"#0d0d0d",border:"1px solid #1a1a1a",borderRadius:10,padding:12}}>
+                <div style={{display:"flex",gap:8,marginBottom:8,alignItems:"center",flexWrap:"wrap"}}>
+                  <PosBadge positie={s.positie}/>
+                  <select value={s.land} onChange={e=>updSpeler(si,"land",e.target.value)} style={{...IS,flex:1,minWidth:120,fontSize:13}}>
+                    <option value="">Land...</option>
+                    {WK_LANDEN.map(l=>(<option key={l} value={l}>{l}</option>))}
+                  </select>
+                  <input placeholder="Naam" value={s.naam||""} onChange={e=>updSpeler(si,"naam",e.target.value)} style={{...IS,flex:1,minWidth:120}}/>
+                </div>
+                <StatEditor speler={s} onChange={(stat,val)=>updStat(si,stat,val)}/>
+                <div style={{marginTop:8,fontSize:13,color:ORANJE,fontWeight:700}}>Punten: {calcPoints(s)}</div>
+              </div>))}
+              <div style={{display:"flex",gap:8,marginTop:12}}>
+                <button onClick={saveEdit} disabled={opslaan} style={{...BG,flex:1,opacity:opslaan?0.6:1}}>{opslaan?"Opslaan...":"Opslaan"}</button>
+                <button onClick={()=>{setEditId(null);setEditForm(null);}} style={BX}>Annuleren</button>
+              </div>
+            </div>):(<div style={{display:"flex",alignItems:"center",padding:"13px 16px",gap:10}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:700,fontSize:14}}>{d.naam}</div>
+                <div style={{fontSize:12,color:"#555"}}>{d.teamnaam||"-"} - <span style={{color:ORANJE}}>{d.systeem}</span> - {d.email||""}</div>
+              </div>
+              <div className="bebas" style={{fontSize:20,color:ORANJE,flexShrink:0}}>{calcTotal(d)} pt</div>
+              <button onClick={()=>startEdit(d)} style={BX}>Punten invoeren</button>
+              <button onClick={()=>deleteDeelnemer(d.id)} style={{...BX,color:"#ef4444"}}>X</button>
+            </div>)}
+          </div>))}
+          {deelnemers.length===0&&<div style={{color:"#333",textAlign:"center",padding:60}}>Nog geen deelnemers.</div>}
+        </div>)}
+
+      </div>}
+
+      <div style={{textAlign:"center",padding:"30px 20px",borderTop:"1px solid #111",marginTop:40}}>
+        <div style={{fontSize:11,color:"#333",letterSpacing:2}}>WK 2026 POULE</div>
+        {!deadlineVerstreken()&&<div style={{fontSize:12,color:"#444",marginTop:6}}>Inschrijving sluit: <span style={{color:ORANJE}}>{formatDeadline()}</span></div>}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
