@@ -1,0 +1,1417 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>WK 2026 Poule</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root { --orange:#FF6B00; --orange-deep:#E85D00; --orange-light:#FF8533; --orange-soft:#FFE4CC; }
+  [data-theme="dark"] {
+    --bg:#0F0F10; --bg-2:#18181B; --bg-3:#1F1F23;
+    --fg:#F5F5F7; --fg-muted:#A1A1AA; --border:#2A2A2F;
+    --card:#18181B; --card-hover:#22222A;
+    --shadow:0 10px 40px rgba(0,0,0,0.5);
+    --header-grad:linear-gradient(135deg,#1a0f08 0%,#0F0F10 70%);
+  }
+  [data-theme="light"] {
+    --bg:#FAFAF7; --bg-2:#FFFFFF; --bg-3:#F4F4F0;
+    --fg:#18181B; --fg-muted:#52525B; --border:#E4E4E7;
+    --card:#FFFFFF; --card-hover:#FAFAF7;
+    --shadow:0 8px 32px rgba(0,0,0,0.08);
+    --header-grad:linear-gradient(135deg,#FFF5EC 0%,#FAFAF7 70%);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--fg);transition:background .3s,color .3s;min-height:100vh}
+  body[dir="rtl"]{font-family:'Inter','Segoe UI',Tahoma,sans-serif}
+  #root{min-height:100vh}
+  .bebas{font-family:'Bebas Neue',Impact,sans-serif;letter-spacing:.03em}
+  .header{position:relative;background:var(--header-grad);border-bottom:1px solid var(--border);overflow:hidden;padding:24px 0 28px}
+  .header-bg-virgil{position:absolute;left:-40px;top:50%;transform:translateY(-50%);height:260%;opacity:.32;pointer-events:none;filter:saturate(1.4);z-index:0;mask-image:linear-gradient(to right,black 0%,black 35%,transparent 80%);-webkit-mask-image:linear-gradient(to right,black 0%,black 35%,transparent 80%)}
+  [data-theme="light"] .header-bg-virgil{opacity:.22}
+  [dir="rtl"] .header-bg-virgil{left:auto;right:-40px}
+  .header-gradient-accent{position:absolute;top:0;right:0;width:40%;height:100%;background:radial-gradient(circle at top right,rgba(255,107,0,.18),transparent 60%);pointer-events:none}
+  .header-inner{position:relative;z-index:1;max-width:1200px;margin:0 auto;padding:0 20px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+  .title-block{display:flex;align-items:center;gap:14px}
+  .title-block img.trophy{height:56px;width:auto;filter:drop-shadow(0 4px 12px rgba(255,107,0,.4));animation:trophyFloat 4s ease-in-out infinite}
+  @keyframes trophyFloat{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-6px) rotate(3deg)}}
+  .title-text h1{font-family:'Bebas Neue',sans-serif;font-size:clamp(28px,5vw,44px);line-height:1;letter-spacing:.02em}
+  .title-text h1 .accent{color:var(--orange)}
+  .title-text .sub{font-size:11px;letter-spacing:.3em;color:var(--fg-muted);text-transform:uppercase;font-weight:600;margin-top:4px}
+  .header-actions{display:flex;align-items:center;gap:10px}
+  .theme-toggle,.lang-btn{background:var(--card);border:1px solid var(--border);color:var(--fg);cursor:pointer;padding:8px 12px;border-radius:10px;font-family:inherit;font-size:14px;display:flex;align-items:center;gap:6px;transition:all .2s}
+  .theme-toggle:hover,.lang-btn:hover{background:var(--card-hover);border-color:var(--orange)}
+  .theme-toggle{font-size:18px;padding:8px 10px}
+  .lang-wrap{position:relative}
+  .lang-menu{position:absolute;top:100%;right:0;margin-top:6px;background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;min-width:180px;z-index:1000;box-shadow:var(--shadow)}
+  [dir="rtl"] .lang-menu{right:auto;left:0}
+  .lang-menu button{display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;padding:10px 14px;color:var(--fg);cursor:pointer;font-family:inherit;font-size:14px;text-align:inherit;transition:background .15s}
+  .lang-menu button:hover{background:var(--bg-3)}
+  .lang-menu button.active{background:var(--orange-soft);color:var(--orange-deep)}
+  [data-theme="dark"] .lang-menu button.active{background:rgba(255,107,0,.15);color:var(--orange-light)}
+  .tabs{max-width:1200px;margin:0 auto;padding:20px;display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
+  .tabs::-webkit-scrollbar{display:none}
+  .tab{flex-shrink:0;padding:10px 18px;background:var(--card);border:1px solid var(--border);color:var(--fg-muted);cursor:pointer;border-radius:10px;font-family:'Bebas Neue',sans-serif;font-size:16px;letter-spacing:.08em;transition:all .2s}
+  .tab:hover{color:var(--fg);border-color:var(--orange)}
+  .tab.active{background:var(--orange);color:white;border-color:var(--orange);box-shadow:0 4px 14px rgba(255,107,0,.3)}
+  .main{max-width:1200px;margin:0 auto;padding:0 20px 80px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;transition:all .2s}
+  .card-title{font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:.05em;margin-bottom:16px;display:flex;align-items:center;gap:10px}
+  .card-title::before{content:'';width:4px;height:20px;background:var(--orange);border-radius:2px}
+  .podium{display:grid;grid-template-columns:1fr 1.2fr 1fr;gap:12px;align-items:end;margin:30px 0}
+  .podium-step{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px 12px;text-align:center;transition:transform .3s}
+  .podium-step:hover{transform:translateY(-6px)}
+  .podium-step.gold{background:linear-gradient(180deg,rgba(255,107,0,.15),var(--card));border-color:var(--orange);min-height:200px}
+  .podium-step.silver{min-height:170px}
+  .podium-step.bronze{min-height:150px}
+  .podium-medal{font-size:36px;margin-bottom:8px}
+  .podium-rank{font-family:'Bebas Neue',sans-serif;font-size:42px;line-height:1;color:var(--orange)}
+  .podium-name{font-weight:700;margin:6px 0 2px;font-size:14px}
+  .podium-team{font-size:12px;color:var(--fg-muted)}
+  .podium-points{font-family:'Bebas Neue',sans-serif;font-size:28px;color:var(--fg);margin-top:8px}
+  .rank-list{display:flex;flex-direction:column;gap:8px;margin-top:20px}
+  .rank-row{display:grid;grid-template-columns:40px 1fr 1fr 80px;gap:12px;align-items:center;padding:12px 16px;background:var(--card);border:1px solid var(--border);border-radius:10px;transition:all .2s}
+  .rank-row:hover{background:var(--card-hover);border-color:var(--orange);transform:translateX(4px)}
+  [dir="rtl"] .rank-row:hover{transform:translateX(-4px)}
+  .rank-num{font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--orange)}
+  .rank-name{font-weight:600;font-size:14px}
+  .rank-team{color:var(--fg-muted);font-size:13px}
+  .rank-pts{font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--fg);text-align:right}
+  .groups-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin-top:16px}
+  .group-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;transition:all .2s}
+  .group-card:hover{border-color:var(--orange)}
+  .group-letter{display:inline-block;width:36px;height:36px;background:var(--orange);color:white;border-radius:8px;font-family:'Bebas Neue',sans-serif;font-size:24px;text-align:center;line-height:36px;margin-bottom:10px}
+  .group-team{display:flex;justify-content:space-between;padding:6px 0;font-size:14px;border-bottom:1px dashed var(--border)}
+  .group-team:last-child{border-bottom:none}
+  .match-row{display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;padding:14px 18px;background:var(--card);border:1px solid var(--border);border-radius:12px;margin-bottom:10px;transition:all .2s}
+  .match-row:hover{border-color:var(--orange)}
+  .match-team{font-weight:600}
+  .match-team.left{text-align:right}
+  .match-team.right{text-align:left}
+  [dir="rtl"] .match-team.left{text-align:left}
+  [dir="rtl"] .match-team.right{text-align:right}
+  .match-vs{font-family:'Bebas Neue',sans-serif;font-size:14px;color:var(--orange);padding:4px 10px;background:var(--bg-3);border-radius:6px}
+  .match-meta{font-size:11px;color:var(--fg-muted);margin-top:4px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+  .match-date-header{font-family:'Bebas Neue',sans-serif;font-size:18px;color:var(--orange);margin:20px 0 10px;padding-bottom:6px;border-bottom:2px solid var(--orange);letter-spacing:.05em}
+  .countdown-wrap{position:relative;padding:40px 24px;background:linear-gradient(135deg,rgba(255,107,0,.12),transparent);border:1px solid var(--orange);border-radius:20px;overflow:hidden;text-align:center}
+  .countdown-wc-bg{position:absolute;right:-40px;top:50%;transform:translateY(-50%);height:220%;opacity:.35;pointer-events:none;filter:saturate(1.3)}
+  [data-theme="light"] .countdown-wc-bg{opacity:.22}
+  [dir="rtl"] .countdown-wc-bg{right:auto;left:-20px}
+  .countdown-label{font-family:'Bebas Neue',sans-serif;font-size:20px;color:var(--orange);letter-spacing:.1em;margin-bottom:16px;position:relative}
+  .countdown-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;max-width:600px;margin:0 auto;position:relative}
+  .countdown-unit{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px 8px}
+  .countdown-num{font-family:'Bebas Neue',sans-serif;font-size:clamp(28px,6vw,48px);line-height:1;color:var(--fg)}
+  .countdown-unit-label{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--fg-muted);margin-top:6px}
+  .step-indicator{display:flex;align-items:center;gap:8px;margin-bottom:20px}
+  .step-dot{width:30px;height:30px;border-radius:50%;background:var(--bg-3);border:2px solid var(--border);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
+  .step-dot.active,.step-dot.done{background:var(--orange);border-color:var(--orange);color:white}
+  .step-line{flex:1;height:2px;background:var(--border)}
+  .step-line.active{background:var(--orange)}
+  label{display:block;margin-bottom:6px;font-size:13px;font-weight:600;color:var(--fg-muted)}
+  input,select,textarea{width:100%;padding:12px 14px;background:var(--bg-2);border:1px solid var(--border);color:var(--fg);border-radius:10px;font-family:inherit;font-size:14px;transition:all .2s;margin-bottom:14px}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--orange);box-shadow:0 0 0 3px rgba(255,107,0,.15)}
+  .btn{padding:12px 22px;background:var(--orange);color:white;border:none;border-radius:10px;font-family:'Bebas Neue',sans-serif;font-size:16px;letter-spacing:.08em;cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:8px}
+  .btn:hover{background:var(--orange-deep);transform:translateY(-2px);box-shadow:0 6px 18px rgba(255,107,0,.35)}
+  .btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+  .btn-outline{background:transparent;color:var(--fg);border:1px solid var(--border)}
+  .btn-outline:hover{background:var(--card-hover);border-color:var(--orange);color:var(--orange);box-shadow:none;transform:none}
+  .error{color:#FF4D4D;font-size:13px;margin:6px 0 12px}
+  .success{color:#10B981;background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);padding:12px 16px;border-radius:10px;margin-bottom:14px}
+  .squad-formation{position:relative;background:linear-gradient(to bottom,#1a6b2f 0%,#2a8a3f 100%);border-radius:16px;padding:20px;min-height:420px;margin:20px 0;overflow:hidden}
+  .squad-formation::before{content:'';position:absolute;inset:20px;border:2px solid rgba(255,255,255,.25);border-radius:8px;pointer-events:none}
+  .squad-formation::after{content:'';position:absolute;left:50%;top:20px;bottom:20px;width:2px;background:rgba(255,255,255,.25);pointer-events:none}
+  .pos-row{display:flex;justify-content:space-around;position:relative;z-index:1;margin:10px 0}
+  .pos-slot{background:rgba(255,255,255,.95);color:#18181B;width:90px;padding:8px 6px;border-radius:8px;font-size:11px;text-align:center;cursor:pointer;transition:all .2s;border:2px solid transparent}
+  .pos-slot:hover{transform:scale(1.05);border-color:var(--orange)}
+  .pos-slot.filled{background:var(--orange);color:white}
+  .pos-slot-label{font-family:'Bebas Neue',sans-serif;font-size:10px;letter-spacing:.1em;opacity:.7;text-transform:uppercase}
+  .pos-slot-country{font-weight:700;font-size:12px;margin-top:4px}
+  .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:2000;padding:20px;animation:fadeIn .2s}
+  @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+  .modal{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;max-width:500px;width:100%;max-height:85vh;overflow-y:auto;animation:slideUp .25s}
+  @keyframes slideUp{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+  .modal-title{font-family:'Bebas Neue',sans-serif;font-size:22px;margin-bottom:14px;color:var(--orange);letter-spacing:.05em}
+  .country-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;max-height:400px;overflow-y:auto;padding:4px}
+  .country-btn{padding:10px 8px;background:var(--bg-3);border:1px solid var(--border);color:var(--fg);cursor:pointer;border-radius:8px;font-size:12px;font-weight:600;text-align:center;transition:all .15s}
+  .country-btn:hover:not(:disabled){background:var(--orange);color:white;border-color:var(--orange)}
+  .country-btn:disabled{opacity:.3;cursor:not-allowed;text-decoration:line-through}
+  .admin-player{display:flex;justify-content:space-between;padding:4px 0;font-size:12px;gap:8px;align-items:center}
+  .admin-input-mini{width:70px;padding:4px 6px;font-size:12px;margin:0}
+  .float-photo{display:none}
+  /* Section decoration photos - non-fixed, blend into card */
+  .deco-photo{position:absolute;pointer-events:none;opacity:.28;filter:saturate(1.2);transition:opacity .3s;z-index:0}
+  [data-theme="light"] .deco-photo{opacity:.18}
+  .podium-step{position:relative;overflow:hidden}
+  .podium-step .deco-photo{right:-25px;bottom:-20px;height:140%;opacity:.30}
+  [data-theme="light"] .podium-step .deco-photo{opacity:.20}
+  .podium-step.gold .deco-photo{opacity:.38}
+  [data-theme="light"] .podium-step.gold .deco-photo{opacity:.25}
+  .podium-step > *:not(.deco-photo){position:relative;z-index:1}
+  .countdown-wrap > *:not(.countdown-wc-bg){position:relative;z-index:1}
+  .register-card{position:relative;overflow:hidden}
+  .register-card .deco-photo{right:-30px;top:-20px;height:280px;opacity:.18}
+  [data-theme="light"] .register-card .deco-photo{opacity:.12}
+  .register-card > *:not(.deco-photo){position:relative;z-index:1}
+  .empty-state-photo{height:140px;width:auto;opacity:.6;margin-bottom:16px;filter:saturate(1.0)}
+  .match-date-header{position:relative}
+  .spinner{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--orange);border-radius:50%;animation:spin .8s linear infinite;margin:40px auto}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .empty-state{text-align:center;padding:40px 20px;color:var(--fg-muted)}
+  .flag{font-size:1.1em;display:inline-block}
+  .badge{display:inline-block;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600;background:var(--orange-soft);color:var(--orange-deep)}
+  [data-theme="dark"] .badge{background:rgba(255,107,0,.15);color:var(--orange-light)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-track{background:var(--bg)}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:5px}
+  ::-webkit-scrollbar-thumb:hover{background:var(--orange)}
+  @media (max-width:680px){
+    .podium{grid-template-columns:1fr}
+    .podium-step{min-height:auto !important}
+    .rank-row{grid-template-columns:30px 1fr 60px}
+    .rank-team{display:none}
+    .match-row{grid-template-columns:1fr;gap:6px;text-align:center}
+    .match-team.left,.match-team.right{text-align:center}
+    .pos-slot{width:70px;font-size:10px}
+    .title-text h1{font-size:26px}
+    .title-block img.trophy{height:42px}
+  }
+</style>
+</head>
+<body data-theme="dark" dir="ltr">
+<div id="root"><div class="spinner"></div></div>
+
+<script type="text/babel">
+const { useState, useEffect, useMemo, useCallback, useRef, createContext, useContext } = React;
+
+// ═══════════════════════════════════════════════════════════════
+//  CONFIG
+// ═══════════════════════════════════════════════════════════════
+const SUPABASE_URL = "https://ucqimrpcndzepgofwdvt.supabase.co";
+const SUPABASE_KEY = "sb_publishable_aZOBdvvKzklrnnq4-b2c7A_MfPRjYV8";
+const ADMIN_WACHTWOORD = "poule2026";
+const DEADLINE = new Date("2026-06-10T23:59:59+02:00");
+const WC_START = new Date("2026-06-11T18:00:00+02:00");
+
+const STORAGE_BASE = SUPABASE_URL + "/storage/v1/object/public/fotos/";
+const PHOTOS = {
+  virgil: STORAGE_BASE + "virgil-removebg-preview.png",
+  messi: STORAGE_BASE + "messi_2.0-removebg-preview.png",
+  mbappe: STORAGE_BASE + "mbappe-removebg-preview.png",
+  ronaldo: STORAGE_BASE + "ronadlo-removebg-preview.png",
+  weghorst: STORAGE_BASE + "weghorst-removebg-preview.png",
+  hakimi: STORAGE_BASE + "hakimi-removebg-preview.png",
+  mane: STORAGE_BASE + "Mane-removebg-preview.png",
+  yamal: STORAGE_BASE + "yamal-removebg-preview.png",
+  palmer: STORAGE_BASE + "palmer-removebg-preview.png",
+  trophy: STORAGE_BASE + "world_cup-removebg-preview.png",
+  wcPhoto: STORAGE_BASE + "world_cup_foto-removebg-preview.png",
+  paqueta: STORAGE_BASE + "paquetta-removebg-preview.png",
+  bacuna: STORAGE_BASE + "bacuna-removebg-preview.png"
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  SUPABASE REST (direct fetch - no library dependency)
+// ═══════════════════════════════════════════════════════════════
+const DB = SUPABASE_URL + "/rest/v1";
+const HDR = {
+  "Content-Type": "application/json",
+  "apikey": SUPABASE_KEY,
+  "Authorization": "Bearer " + SUPABASE_KEY
+};
+
+async function dbLees() {
+  try {
+    const r = await fetch(DB + "/deelnemers?select=*&order=id", { headers: HDR });
+    if (!r.ok) return [];
+    const data = await r.json();
+    return data.map(d => ({
+      ...d,
+      spelers: typeof d.spelers === "string" ? (function(){ try { return JSON.parse(d.spelers); } catch { return []; } })() : (d.spelers || [])
+    }));
+  } catch (e) { console.error("dbLees error", e); return []; }
+}
+
+async function dbToevoegen(deelnemer) {
+  const body = {
+    naam: deelnemer.naam,
+    teamnaam: deelnemer.teamnaam || "",
+    email: deelnemer.email || "",
+    systeem: deelnemer.systeem || "",
+    spelers: JSON.stringify(deelnemer.spelers || [])
+  };
+  const r = await fetch(DB + "/deelnemers", {
+    method: "POST",
+    headers: { ...HDR, "Prefer": "return=representation" },
+    body: JSON.stringify(body)
+  });
+  if (!r.ok) throw new Error("Insert mislukt: " + r.status);
+  const data = await r.json();
+  return Array.isArray(data) ? data[0] : data;
+}
+
+async function dbBijwerkenSpelers(id, spelers) {
+  const r = await fetch(DB + "/deelnemers?id=eq." + id, {
+    method: "PATCH",
+    headers: { ...HDR, "Prefer": "return=representation" },
+    body: JSON.stringify({ spelers: JSON.stringify(spelers) })
+  });
+  if (!r.ok) throw new Error("Update mislukt: " + r.status);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  LANGUAGES
+// ═══════════════════════════════════════════════════════════════
+const LANGUAGES = [
+  { code:"nl", label:"Nederlands", flag:"🇳🇱", tz:"Europe/Amsterdam", dir:"ltr" },
+  { code:"en", label:"English",    flag:"🇬🇧", tz:"Europe/London",    dir:"ltr" },
+  { code:"es", label:"Español",    flag:"🇪🇸", tz:"America/Chicago",  dir:"ltr" },
+  { code:"fr", label:"Français",   flag:"🇫🇷", tz:"Europe/Paris",     dir:"ltr" },
+  { code:"pt", label:"Português",  flag:"🇧🇷", tz:"America/Sao_Paulo",dir:"ltr" },
+  { code:"ar", label:"العربية",    flag:"🇸🇦", tz:"Asia/Riyadh",      dir:"rtl" }
+];
+
+const T = {
+  nl: { title:"WK 2026 POULE", subtitle:"United • 2026",
+    tabs:{ranking:"🏆 Ranglijst",matches:"⚽ Wedstrijden",results:"⏱️ Uitslagen",teams:"👥 Teams",register:"✍️ Inschrijven",admin:"⚙️ Beheer"},
+    countdownTo:"AFTELLEN NAAR HET WK", days:"Dagen",hours:"Uren",minutes:"Min",seconds:"Sec", started:"Het WK is begonnen!",
+    matchSchedule:"📅 Wedstrijdschema",groups:"🌎 Groepen",knockout:"🏟️ Knockout-fase",
+    r16:"Achtste finales",qf:"Kwartfinales",sf:"Halve finales",final:"Finale",thirdp:"Troostfinale", pts:"Ptn",
+    noParticipants:"Nog geen deelnemers", register1:"Inschrijven – Stap 1",register2:"Inschrijven – Stap 2",
+    name:"Jouw naam",teamName:"Teamnaam",email:"E-mail",system:"Spelsysteem",
+    next:"Volgende",back:"Terug",submit:"Team inschrijven",
+    pickPlayers:"Kies per positie een speler (1 per land)", selectCountry:"Selecteer land", countryTaken:"Land al gekozen",
+    deadlinePassed:"De inschrijfdeadline (10 juni 2026) is verstreken.", deadlineBefore:"Inschrijfdeadline:",
+    successReg:"Je team is succesvol ingeschreven! 🎉",
+    adminLogin:"Beheer – Inloggen",password:"Wachtwoord",login:"Inloggen",wrongPw:"Onjuist wachtwoord",
+    adminPanel:"Puntenbeheer",exportExcel:"Exporteer naar Excel",logout:"Uitloggen",save:"Opslaan",saved:"Opgeslagen",
+    noTeamsYet:"Nog geen teams ingeschreven",
+    pos:{keeper:"Doelman",def:"Verdediger",mid:"Middenvelder",att:"Aanvaller",coach:"Coach"},
+    resultsPage:"Uitslagen volgen binnenkort",
+    timezoneInfo:"Tijden in jouw lokale tijdzone:"
+  },
+  en: { title:"WC 2026 POOL", subtitle:"United • 2026",
+    tabs:{ranking:"🏆 Ranking",matches:"⚽ Matches",results:"⏱️ Results",teams:"👥 Teams",register:"✍️ Register",admin:"⚙️ Admin"},
+    countdownTo:"COUNTDOWN TO THE WORLD CUP", days:"Days",hours:"Hours",minutes:"Min",seconds:"Sec", started:"The World Cup has started!",
+    matchSchedule:"📅 Match Schedule",groups:"🌎 Groups",knockout:"🏟️ Knockout stage",
+    r16:"Round of 16",qf:"Quarter-finals",sf:"Semi-finals",final:"Final",thirdp:"3rd place", pts:"Pts",
+    noParticipants:"No participants yet", register1:"Register – Step 1",register2:"Register – Step 2",
+    name:"Your name",teamName:"Team name",email:"Email",system:"Formation",
+    next:"Next",back:"Back",submit:"Submit team",
+    pickPlayers:"Pick one player per position (1 per country)", selectCountry:"Select country", countryTaken:"Country already chosen",
+    deadlinePassed:"Registration deadline (June 10, 2026) has passed.", deadlineBefore:"Registration deadline:",
+    successReg:"Your team has been registered! 🎉",
+    adminLogin:"Admin login",password:"Password",login:"Log in",wrongPw:"Wrong password",
+    adminPanel:"Points management",exportExcel:"Export to Excel",logout:"Log out",save:"Save",saved:"Saved",
+    noTeamsYet:"No teams registered yet",
+    pos:{keeper:"Goalkeeper",def:"Defender",mid:"Midfielder",att:"Forward",coach:"Coach"},
+    resultsPage:"Results coming soon",
+    timezoneInfo:"Times in your local timezone:"
+  },
+  es: { title:"QUINIELA MUNDIAL 2026", subtitle:"United • 2026",
+    tabs:{ranking:"🏆 Clasificación",matches:"⚽ Partidos",results:"⏱️ Resultados",teams:"👥 Equipos",register:"✍️ Inscribirse",admin:"⚙️ Admin"},
+    countdownTo:"CUENTA ATRÁS AL MUNDIAL", days:"Días",hours:"Horas",minutes:"Min",seconds:"Seg", started:"¡El Mundial ha comenzado!",
+    matchSchedule:"📅 Calendario",groups:"🌎 Grupos",knockout:"🏟️ Eliminatorias",
+    r16:"Octavos",qf:"Cuartos",sf:"Semifinales",final:"Final",thirdp:"3er puesto", pts:"Pts",
+    noParticipants:"Sin participantes aún", register1:"Inscripción – Paso 1",register2:"Inscripción – Paso 2",
+    name:"Tu nombre",teamName:"Nombre del equipo",email:"Email",system:"Sistema",
+    next:"Siguiente",back:"Atrás",submit:"Enviar equipo",
+    pickPlayers:"Elige un jugador por posición (1 por país)", selectCountry:"Selecciona país", countryTaken:"País ya elegido",
+    deadlinePassed:"La fecha límite (10 de junio de 2026) ha pasado.", deadlineBefore:"Fecha límite:",
+    successReg:"¡Tu equipo se ha registrado! 🎉",
+    adminLogin:"Acceso admin",password:"Contraseña",login:"Entrar",wrongPw:"Contraseña incorrecta",
+    adminPanel:"Gestión de puntos",exportExcel:"Exportar a Excel",logout:"Cerrar sesión",save:"Guardar",saved:"Guardado",
+    noTeamsYet:"Aún no hay equipos",
+    pos:{keeper:"Portero",def:"Defensa",mid:"Centrocampista",att:"Delantero",coach:"DT"},
+    resultsPage:"Resultados próximamente",
+    timezoneInfo:"Horarios en tu zona horaria:"
+  },
+  fr: { title:"COUPE DU MONDE 2026", subtitle:"United • 2026",
+    tabs:{ranking:"🏆 Classement",matches:"⚽ Matchs",results:"⏱️ Résultats",teams:"👥 Équipes",register:"✍️ Inscription",admin:"⚙️ Admin"},
+    countdownTo:"COMPTE À REBOURS – COUPE DU MONDE", days:"Jours",hours:"Heures",minutes:"Min",seconds:"Sec", started:"La Coupe du Monde a commencé!",
+    matchSchedule:"📅 Calendrier",groups:"🌎 Groupes",knockout:"🏟️ Phase à élimination",
+    r16:"Huitièmes",qf:"Quarts",sf:"Demies",final:"Finale",thirdp:"3e place", pts:"Pts",
+    noParticipants:"Aucun participant", register1:"Inscription – Étape 1",register2:"Inscription – Étape 2",
+    name:"Votre nom",teamName:"Nom d'équipe",email:"E-mail",system:"Système",
+    next:"Suivant",back:"Retour",submit:"Envoyer l'équipe",
+    pickPlayers:"Un joueur par poste (1 par pays)", selectCountry:"Choisir un pays", countryTaken:"Pays déjà pris",
+    deadlinePassed:"Date limite (10 juin 2026) dépassée.", deadlineBefore:"Date limite:",
+    successReg:"Équipe inscrite! 🎉",
+    adminLogin:"Connexion admin",password:"Mot de passe",login:"Se connecter",wrongPw:"Mot de passe erroné",
+    adminPanel:"Gestion des points",exportExcel:"Exporter Excel",logout:"Déconnexion",save:"Enregistrer",saved:"Enregistré",
+    noTeamsYet:"Pas encore d'équipes",
+    pos:{keeper:"Gardien",def:"Défenseur",mid:"Milieu",att:"Attaquant",coach:"Coach"},
+    resultsPage:"Résultats bientôt",
+    timezoneInfo:"Horaires dans votre fuseau:"
+  },
+  pt: { title:"BOLÃO COPA 2026", subtitle:"United • 2026",
+    tabs:{ranking:"🏆 Classificação",matches:"⚽ Jogos",results:"⏱️ Resultados",teams:"👥 Times",register:"✍️ Inscrever",admin:"⚙️ Admin"},
+    countdownTo:"CONTAGEM REGRESSIVA PARA A COPA", days:"Dias",hours:"Horas",minutes:"Min",seconds:"Seg", started:"A Copa começou!",
+    matchSchedule:"📅 Calendário",groups:"🌎 Grupos",knockout:"🏟️ Mata-mata",
+    r16:"Oitavas",qf:"Quartas",sf:"Semifinais",final:"Final",thirdp:"3º lugar", pts:"Pts",
+    noParticipants:"Sem participantes", register1:"Inscrição – Passo 1",register2:"Inscrição – Passo 2",
+    name:"Seu nome",teamName:"Nome do time",email:"E-mail",system:"Esquema",
+    next:"Próximo",back:"Voltar",submit:"Enviar time",
+    pickPlayers:"Um jogador por posição (1 por país)", selectCountry:"Selecionar país", countryTaken:"País já escolhido",
+    deadlinePassed:"Prazo (10 de junho de 2026) expirou.", deadlineBefore:"Prazo:",
+    successReg:"Time inscrito! 🎉",
+    adminLogin:"Login admin",password:"Senha",login:"Entrar",wrongPw:"Senha errada",
+    adminPanel:"Gestão de pontos",exportExcel:"Exportar Excel",logout:"Sair",save:"Salvar",saved:"Salvo",
+    noTeamsYet:"Nenhum time ainda",
+    pos:{keeper:"Goleiro",def:"Zagueiro",mid:"Meio-campo",att:"Atacante",coach:"Técnico"},
+    resultsPage:"Resultados em breve",
+    timezoneInfo:"Horários no seu fuso:"
+  },
+  ar: { title:"كأس العالم 2026", subtitle:"يونايتد • 2026",
+    tabs:{ranking:"🏆 الترتيب",matches:"⚽ المباريات",results:"⏱️ النتائج",teams:"👥 الفرق",register:"✍️ التسجيل",admin:"⚙️ الإدارة"},
+    countdownTo:"العد التنازلي لكأس العالم", days:"أيام",hours:"ساعات",minutes:"دقائق",seconds:"ثوان", started:"كأس العالم قد بدأ!",
+    matchSchedule:"📅 جدول المباريات",groups:"🌎 المجموعات",knockout:"🏟️ الأدوار الإقصائية",
+    r16:"دور الـ16",qf:"ربع النهائي",sf:"نصف النهائي",final:"النهائي",thirdp:"المركز الثالث", pts:"نقاط",
+    noParticipants:"لا يوجد مشاركون بعد", register1:"التسجيل – الخطوة 1",register2:"التسجيل – الخطوة 2",
+    name:"اسمك",teamName:"اسم الفريق",email:"البريد",system:"النظام",
+    next:"التالي",back:"رجوع",submit:"إرسال الفريق",
+    pickPlayers:"لاعب واحد لكل مركز (1 لكل دولة)", selectCountry:"اختر دولة", countryTaken:"الدولة مأخوذة",
+    deadlinePassed:"انتهى الموعد النهائي (10 يونيو 2026).", deadlineBefore:"الموعد النهائي:",
+    successReg:"تم تسجيل فريقك! 🎉",
+    adminLogin:"دخول الإدارة",password:"كلمة المرور",login:"دخول",wrongPw:"كلمة مرور خاطئة",
+    adminPanel:"إدارة النقاط",exportExcel:"تصدير Excel",logout:"خروج",save:"حفظ",saved:"تم الحفظ",
+    noTeamsYet:"لا توجد فرق مسجلة بعد",
+    pos:{keeper:"حارس",def:"مدافع",mid:"وسط",att:"مهاجم",coach:"مدرب"},
+    resultsPage:"النتائج قريباً",
+    timezoneInfo:"التوقيت في منطقتك:"
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  WC 2026 GROUPS & MATCHES
+// ═══════════════════════════════════════════════════════════════
+const GROUPS = {
+  A:["Mexico","Zuid-Afrika","Zuid-Korea","Tsjechie"],
+  B:["Canada","Bosnie","Qatar","Zwitserland"],
+  C:["Brazilie","Marokko","Haiti","Schotland"],
+  D:["USA","Paraguay","Australie","Turkije"],
+  E:["Duitsland","Curacao","Ivoorkust","Ecuador"],
+  F:["Nederland","Japan","Zweden","Tunesie"],
+  G:["Belgie","Egypte","Iran","Nieuw-Zeeland"],
+  H:["Spanje","Kaapverdie","Saudi-Arabie","Uruguay"],
+  I:["Frankrijk","Senegal","Irak","Noorwegen"],
+  J:["Argentinie","Algerije","Oostenrijk","Jordanie"],
+  K:["Portugal","DR Congo","Oezbekistan","Colombia"],
+  L:["Engeland","Kroatie","Ghana","Panama"]
+};
+const ALL_COUNTRIES = Object.values(GROUPS).flat().sort();
+
+const CITIES = {
+  mex:"Mexico City",gdl:"Guadalajara",mty:"Monterrey",
+  tor:"Toronto",van:"Vancouver",
+  atl:"Atlanta",bos:"Boston",dal:"Dallas",hou:"Houston",
+  kc:"Kansas City",la:"Los Angeles",mia:"Miami",
+  ny:"New York/NJ",phi:"Philadelphia",sf:"San Francisco Bay",sea:"Seattle"
+};
+
+function mk(date, time, home, away, group, city) {
+  return { date, time, home, away, group, city };
+}
+
+const GROUP_MATCHES = [
+  mk("2026-06-11","18:00","Mexico","Zuid-Afrika","A",CITIES.mex),
+  mk("2026-06-11","21:00","Zuid-Korea","Tsjechie","A",CITIES.gdl),
+  mk("2026-06-12","18:00","Canada","Bosnie","B",CITIES.tor),
+  mk("2026-06-12","21:00","Qatar","Zwitserland","B",CITIES.van),
+  mk("2026-06-13","18:00","Brazilie","Marokko","C",CITIES.mia),
+  mk("2026-06-13","21:00","Haiti","Schotland","C",CITIES.atl),
+  mk("2026-06-14","19:00","USA","Paraguay","D",CITIES.la),
+  mk("2026-06-14","22:00","Nederland","Japan","F",CITIES.dal),
+  mk("2026-06-15","19:00","Australie","Turkije","D",CITIES.sea),
+  mk("2026-06-15","22:00","Zweden","Tunesie","F",CITIES.kc),
+  mk("2026-06-16","18:00","Duitsland","Curacao","E",CITIES.ny),
+  mk("2026-06-16","21:00","Ivoorkust","Ecuador","E",CITIES.phi),
+  mk("2026-06-17","19:00","Belgie","Egypte","G",CITIES.bos),
+  mk("2026-06-17","22:00","Iran","Nieuw-Zeeland","G",CITIES.hou),
+  mk("2026-06-17","21:00","Spanje","Kaapverdie","H",CITIES.sf),
+  mk("2026-06-18","19:00","Saudi-Arabie","Uruguay","H",CITIES.mty),
+  mk("2026-06-18","22:00","Frankrijk","Senegal","I",CITIES.ny),
+  mk("2026-06-18","18:00","Irak","Noorwegen","I",CITIES.gdl),
+  mk("2026-06-19","19:00","Argentinie","Algerije","J",CITIES.mia),
+  mk("2026-06-19","22:00","Oostenrijk","Jordanie","J",CITIES.atl),
+  mk("2026-06-20","18:00","Portugal","DR Congo","K",CITIES.dal),
+  mk("2026-06-20","21:00","Oezbekistan","Colombia","K",CITIES.hou),
+  mk("2026-06-20","19:00","Zweden","Nederland","F",CITIES.hou),
+  mk("2026-06-20","22:00","Engeland","Kroatie","L",CITIES.la),
+  mk("2026-06-21","19:00","Ghana","Panama","L",CITIES.sea),
+  mk("2026-06-21","21:00","Zuid-Afrika","Zuid-Korea","A",CITIES.mex),
+  mk("2026-06-22","18:00","Tsjechie","Mexico","A",CITIES.gdl),
+  mk("2026-06-22","21:00","Bosnie","Qatar","B",CITIES.van),
+  mk("2026-06-23","18:00","Zwitserland","Canada","B",CITIES.tor),
+  mk("2026-06-23","21:00","Marokko","Haiti","C",CITIES.mia),
+  mk("2026-06-24","18:00","Schotland","Brazilie","C",CITIES.atl),
+  mk("2026-06-24","21:00","Paraguay","Australie","D",CITIES.la),
+  mk("2026-06-25","19:00","Turkije","USA","D",CITIES.sea),
+  mk("2026-06-25","22:00","Curacao","Ivoorkust","E",CITIES.ny),
+  mk("2026-06-26","01:00","Tunesie","Nederland","F",CITIES.kc),
+  mk("2026-06-26","19:00","Japan","Zweden","F",CITIES.dal),
+  mk("2026-06-26","22:00","Ecuador","Duitsland","E",CITIES.phi),
+  mk("2026-06-27","19:00","Egypte","Iran","G",CITIES.bos),
+  mk("2026-06-27","22:00","Nieuw-Zeeland","Belgie","G",CITIES.hou),
+  mk("2026-06-28","18:00","Kaapverdie","Saudi-Arabie","H",CITIES.sf),
+  mk("2026-06-28","21:00","Uruguay","Spanje","H",CITIES.mty),
+  mk("2026-06-29","18:00","Senegal","Irak","I",CITIES.gdl),
+  mk("2026-06-29","21:00","Noorwegen","Frankrijk","I",CITIES.ny),
+  mk("2026-06-30","19:00","Algerije","Oostenrijk","J",CITIES.mia),
+  mk("2026-06-30","22:00","Jordanie","Argentinie","J",CITIES.atl),
+  mk("2026-07-01","18:00","DR Congo","Oezbekistan","K",CITIES.dal),
+  mk("2026-07-01","21:00","Colombia","Portugal","K",CITIES.hou),
+  mk("2026-07-02","19:00","Kroatie","Ghana","L",CITIES.la),
+  mk("2026-07-02","22:00","Panama","Engeland","L",CITIES.sea),
+  mk("2026-07-03","20:00","Mexico","Zuid-Korea","A",CITIES.mex),
+  mk("2026-07-03","20:00","Zuid-Afrika","Tsjechie","A",CITIES.gdl),
+  mk("2026-07-04","20:00","Canada","Qatar","B",CITIES.tor),
+  mk("2026-07-04","20:00","Bosnie","Zwitserland","B",CITIES.van),
+  mk("2026-07-05","20:00","Brazilie","Haiti","C",CITIES.mia),
+  mk("2026-07-05","20:00","Marokko","Schotland","C",CITIES.atl),
+  mk("2026-07-06","21:00","USA","Australie","D",CITIES.la),
+  mk("2026-07-06","21:00","Paraguay","Turkije","D",CITIES.sea),
+  mk("2026-07-07","18:00","Duitsland","Ivoorkust","E",CITIES.ny),
+  mk("2026-07-07","18:00","Curacao","Ecuador","E",CITIES.phi),
+  mk("2026-07-07","21:00","Nederland","Tunesie","F",CITIES.dal),
+  mk("2026-07-07","21:00","Japan","Zweden","F",CITIES.kc),
+  mk("2026-07-08","18:00","Belgie","Nieuw-Zeeland","G",CITIES.bos),
+  mk("2026-07-08","18:00","Egypte","Iran","G",CITIES.hou),
+  mk("2026-07-08","21:00","Spanje","Uruguay","H",CITIES.sf),
+  mk("2026-07-08","21:00","Kaapverdie","Saudi-Arabie","H",CITIES.mty),
+  mk("2026-07-09","18:00","Frankrijk","Irak","I",CITIES.gdl),
+  mk("2026-07-09","18:00","Senegal","Noorwegen","I",CITIES.ny),
+  mk("2026-07-09","21:00","Argentinie","Jordanie","J",CITIES.mia),
+  mk("2026-07-09","21:00","Algerije","Oostenrijk","J",CITIES.atl),
+  mk("2026-07-10","18:00","Portugal","Colombia","K",CITIES.dal),
+  mk("2026-07-10","18:00","DR Congo","Oezbekistan","K",CITIES.hou),
+  mk("2026-07-10","21:00","Engeland","Ghana","L",CITIES.la),
+  mk("2026-07-10","21:00","Kroatie","Panama","L",CITIES.sea)
+];
+
+const KNOCKOUT = [
+  { stage:"r16", matches:16 },
+  { stage:"qf", matches:8 },
+  { stage:"sf", matches:4 },
+  { stage:"thirdp", matches:1 },
+  { stage:"final", matches:1 }
+];
+
+const FORMATIONS = {
+  "1-4-3-3":{keeper:1,def:4,mid:3,att:3},
+  "1-4-4-2":{keeper:1,def:4,mid:4,att:2},
+  "1-3-4-3":{keeper:1,def:3,mid:4,att:3}
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  TIME HELPERS
+// ═══════════════════════════════════════════════════════════════
+function nlLocalToDate(dateStr, timeStr) {
+  const [Y,M,D] = dateStr.split("-").map(Number);
+  const [h,mi] = timeStr.split(":").map(Number);
+  const guess = Date.UTC(Y, M-1, D, h, mi);
+  const asNL = new Date(guess).toLocaleString("en-US", { timeZone: "Europe/Amsterdam" });
+  const asUTC = new Date(guess).toLocaleString("en-US", { timeZone: "UTC" });
+  const diff = new Date(asNL).getTime() - new Date(asUTC).getTime();
+  return new Date(guess - diff);
+}
+
+function formatDateLocalized(dateStr, timeStr, lang) {
+  const info = LANGUAGES.find(l => l.code === lang) || LANGUAGES[0];
+  const d = nlLocalToDate(dateStr, timeStr);
+  const dateFmt = new Intl.DateTimeFormat(lang === "ar" ? "ar-SA" : lang, {
+    timeZone: info.tz, weekday: "short", day: "2-digit", month: "short"
+  });
+  const timeFmt = new Intl.DateTimeFormat(lang === "ar" ? "ar-SA" : lang, {
+    timeZone: info.tz, hour: "2-digit", minute: "2-digit", hour12: false
+  });
+  return { dateLabel: dateFmt.format(d), timeLabel: timeFmt.format(d), dateObj: d };
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PERSISTENCE HOOK
+// ═══════════════════════════════════════════════════════════════
+function usePersisted(key, init) {
+  const [v, setV] = useState(function() {
+    try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : init; } catch { return init; }
+  });
+  useEffect(function() { try { localStorage.setItem(key, JSON.stringify(v)); } catch {} }, [key, v]);
+  return [v, setV];
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  CONTEXT
+// ═══════════════════════════════════════════════════════════════
+const AppCtx = createContext(null);
+function useApp() { return useContext(AppCtx); }
+
+function computeTotalPoints(p) {
+  let spelers = p.spelers;
+  if (typeof spelers === "string") { try { spelers = JSON.parse(spelers); } catch { return 0; } }
+  if (!Array.isArray(spelers)) return 0;
+  return spelers.reduce(function(sum, sp) { return sum + (Number(sp.punten) || 0); }, 0);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  APP
+// ═══════════════════════════════════════════════════════════════
+function App() {
+  const [theme, setTheme] = usePersisted("wk26_theme", "dark");
+  const [lang, setLang] = usePersisted("wk26_lang", "nl");
+  const [tab, setTab] = usePersisted("wk26_tab", "ranking");
+  const [participants, setParticipants] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const currentLang = LANGUAGES.find(function(l) { return l.code === lang; }) || LANGUAGES[0];
+  const t = T[lang] || T.nl;
+
+  useEffect(function() {
+    document.body.setAttribute("data-theme", theme);
+    document.body.setAttribute("dir", currentLang.dir);
+    document.documentElement.setAttribute("lang", lang);
+  }, [theme, lang, currentLang.dir]);
+
+  const loadParticipants = useCallback(async function() {
+    setLoading(true);
+    const data = await dbLees();
+    setParticipants(data);
+    setLoading(false);
+  }, []);
+
+  useEffect(function() { loadParticipants(); }, [loadParticipants]);
+
+  const ctx = { theme, setTheme, lang, setLang, currentLang, t, participants, reloadParticipants: loadParticipants, loading };
+
+  return (
+    <AppCtx.Provider value={ctx}>
+      <FloatingDecor />
+      <Header />
+      <Tabs active={tab} onChange={setTab} />
+      <main className="main">
+        {tab === "ranking" && <RankingTab />}
+        {tab === "matches" && <MatchesTab />}
+        {tab === "results" && <ResultsTab />}
+        {tab === "teams" && <TeamsTab />}
+        {tab === "register" && <RegisterTab />}
+        {tab === "admin" && <AdminTab />}
+      </main>
+    </AppCtx.Provider>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  HEADER
+// ═══════════════════════════════════════════════════════════════
+function Header() {
+  const { theme, setTheme, lang, setLang, currentLang, t } = useApp();
+  const [openLang, setOpenLang] = useState(false);
+  const langRef = useRef(null);
+
+  useEffect(function() {
+    function h(e) { if (langRef.current && !langRef.current.contains(e.target)) setOpenLang(false); }
+    document.addEventListener("mousedown", h);
+    return function() { document.removeEventListener("mousedown", h); };
+  }, []);
+
+  const titleParts = t.title.split(" ");
+  const firstPart = titleParts.slice(0, -1).join(" ");
+  const lastPart = titleParts[titleParts.length - 1];
+
+  return (
+    <header className="header">
+      <img src={PHOTOS.virgil} alt="" className="header-bg-virgil" onError={function(e){e.target.style.display="none";}} />
+      <div className="header-gradient-accent"></div>
+      <div className="header-inner">
+        <div className="title-block">
+          <img src={PHOTOS.trophy} alt="trophy" className="trophy" onError={function(e){e.target.style.display="none";}} />
+          <div className="title-text">
+            <h1>{firstPart} <span className="accent">{lastPart}</span></h1>
+            <div className="sub">{t.subtitle}</div>
+          </div>
+        </div>
+        <div className="header-actions">
+          <button className="theme-toggle" onClick={function(){setTheme(theme==="dark"?"light":"dark");}} aria-label="Toggle theme">
+            {theme === "dark" ? "☀️" : "🌙"}
+          </button>
+          <div className="lang-wrap" ref={langRef}>
+            <button className="lang-btn" onClick={function(){setOpenLang(!openLang);}}>
+              <span className="flag">{currentLang.flag}</span>
+              <span>{currentLang.code.toUpperCase()}</span>
+            </button>
+            {openLang && (
+              <div className="lang-menu">
+                {LANGUAGES.map(function(l) {
+                  return (
+                    <button key={l.code} className={l.code === lang ? "active" : ""} onClick={function(){setLang(l.code);setOpenLang(false);}}>
+                      <span className="flag">{l.flag}</span><span>{l.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  TABS
+// ═══════════════════════════════════════════════════════════════
+function Tabs(props) {
+  const { t } = useApp();
+  const keys = ["ranking","matches","results","teams","register","admin"];
+  return (
+    <nav className="tabs">
+      {keys.map(function(k) {
+        return (
+          <button key={k} className={"tab " + (props.active === k ? "active" : "")} onClick={function(){props.onChange(k);}}>
+            {t.tabs[k]}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+function FloatingDecor() {
+  // Replaced by section-specific decoration photos (see PodiumStep, RegisterTab, etc.)
+  return null;
+}
+
+// Helper: rotating decoration photo per index for variety
+const DECO_PHOTOS = [PHOTOS.messi, PHOTOS.mbappe, PHOTOS.ronaldo, PHOTOS.yamal, PHOTOS.hakimi, PHOTOS.mane, PHOTOS.palmer, PHOTOS.weghorst, PHOTOS.paqueta, PHOTOS.bacuna];
+function getDecoPhoto(seed) {
+  return DECO_PHOTOS[Math.abs(seed) % DECO_PHOTOS.length];
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  RANKING
+// ═══════════════════════════════════════════════════════════════
+function RankingTab() {
+  const { participants, t, loading } = useApp();
+  const ranked = useMemo(function() {
+    return participants.map(function(p) {
+      return Object.assign({}, p, { totalPts: computeTotalPoints(p) });
+    }).sort(function(a, b) { return b.totalPts - a.totalPts; });
+  }, [participants]);
+
+  if (loading) return <div className="spinner"></div>;
+  if (ranked.length === 0) return (
+    <div className="card">
+      <div className="empty-state">
+        <img src={PHOTOS.trophy} alt="" className="empty-state-photo" onError={function(e){e.target.style.display="none";}} />
+        <div>{t.noParticipants}</div>
+      </div>
+    </div>
+  );
+
+  const first = ranked[0], second = ranked[1], third = ranked[2];
+
+  return (
+    <React.Fragment>
+      {ranked.length >= 1 && (
+        <div className="podium">
+          {second ? <PodiumStep step={second} rank={2} cls="silver" medal="🥈" /> : <div />}
+          <PodiumStep step={first} rank={1} cls="gold" medal="🥇" />
+          {third ? <PodiumStep step={third} rank={3} cls="bronze" medal="🥉" /> : <div />}
+        </div>
+      )}
+      <div className="card">
+        <div className="card-title">{t.tabs.ranking}</div>
+        <div className="rank-list">
+          {ranked.map(function(p, i) {
+            return (
+              <div className="rank-row" key={p.id}>
+                <div className="rank-num">{i + 1}</div>
+                <div className="rank-name">{p.naam}</div>
+                <div className="rank-team">{p.teamnaam}</div>
+                <div className="rank-pts">{p.totalPts}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </React.Fragment>
+  );
+}
+
+function PodiumStep(props) {
+  const { t } = useApp();
+  const starPhoto = props.rank === 1 ? PHOTOS.messi : props.rank === 2 ? PHOTOS.mbappe : PHOTOS.ronaldo;
+  const isWinner = props.rank === 1;
+  return (
+    <div className={"podium-step " + props.cls}>
+      <img src={starPhoto} alt="" className="deco-photo" onError={function(e){e.target.style.display="none";}} />
+      {isWinner && (
+        <div style={{position:"absolute",top:6,left:6,fontSize:18,opacity:0.8,zIndex:2}}>🎉</div>
+      )}
+      {isWinner && (
+        <div style={{position:"absolute",top:6,right:6,fontSize:18,opacity:0.8,zIndex:2}}>🎊</div>
+      )}
+      <div className="podium-medal">{props.medal}</div>
+      <div className="podium-rank">#{props.rank}</div>
+      <div className="podium-name">{props.step.naam}</div>
+      <div className="podium-team">{props.step.teamnaam}</div>
+      <div className="podium-points">{props.step.totalPts} <span style={{fontSize:"12px",opacity:0.6}}>{t.pts}</span></div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  MATCHES
+// ═══════════════════════════════════════════════════════════════
+function MatchesTab() {
+  const { t } = useApp();
+  const [sub, setSub] = useState("schedule");
+  return (
+    <React.Fragment>
+      <div className="card" style={{marginBottom:16, display:"flex", gap:8, flexWrap:"wrap"}}>
+        <button className={"tab " + (sub==="schedule"?"active":"")} onClick={function(){setSub("schedule");}}>{t.matchSchedule}</button>
+        <button className={"tab " + (sub==="groups"?"active":"")} onClick={function(){setSub("groups");}}>{t.groups}</button>
+        <button className={"tab " + (sub==="knockout"?"active":"")} onClick={function(){setSub("knockout");}}>{t.knockout}</button>
+      </div>
+      {sub === "schedule" && <ScheduleView />}
+      {sub === "groups" && <GroupsView />}
+      {sub === "knockout" && <KnockoutView />}
+    </React.Fragment>
+  );
+}
+
+function ScheduleView() {
+  const { lang, t, currentLang } = useApp();
+  const tzShortNames = {
+    "Europe/Amsterdam":"Amsterdam",
+    "Europe/London":"London",
+    "America/Chicago":"USA Central",
+    "Europe/Paris":"Paris",
+    "America/Sao_Paulo":"São Paulo",
+    "Asia/Riyadh":"Riyadh"
+  };
+  const grouped = useMemo(function() {
+    const map = new Map();
+    GROUP_MATCHES.forEach(function(mt) {
+      const info = formatDateLocalized(mt.date, mt.time, lang);
+      const key = info.dateObj.toISOString().slice(0,10) + "|" + info.dateLabel;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(mt);
+    });
+    return Array.from(map.entries()).sort(function(a, b) { return a[0].localeCompare(b[0]); });
+  }, [lang]);
+
+  return (
+    <React.Fragment>
+      <div style={{
+        background:"linear-gradient(135deg, rgba(255,107,0,0.18), rgba(255,107,0,0.05))",
+        border:"1px solid var(--orange)",
+        borderRadius:12,
+        padding:"12px 16px",
+        marginBottom:16,
+        display:"flex",
+        alignItems:"center",
+        gap:12,
+        flexWrap:"wrap"
+      }}>
+        <span style={{fontSize:24}}>🕐</span>
+        <div style={{flex:1, minWidth:200}}>
+          <div style={{fontSize:11,letterSpacing:"0.15em",color:"var(--orange)",fontWeight:700,textTransform:"uppercase"}}>{t.timezoneInfo}</div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.05em"}}>
+            <span className="flag">{currentLang.flag}</span> {tzShortNames[currentLang.tz] || currentLang.tz}
+          </div>
+        </div>
+      </div>
+      {grouped.map(function(entry) {
+        const key = entry[0], matches = entry[1];
+        const dateLabel = key.split("|")[1];
+        return (
+          <div key={key}>
+            <div className="match-date-header">{dateLabel}</div>
+            {matches.slice().sort(function(a, b) {
+              return formatDateLocalized(a.date,a.time,lang).dateObj - formatDateLocalized(b.date,b.time,lang).dateObj;
+            }).map(function(mt, i) { return <MatchRow key={i} match={mt} />; })}
+          </div>
+        );
+      })}
+    </React.Fragment>
+  );
+}
+
+function MatchRow(props) {
+  const { lang } = useApp();
+  const info = formatDateLocalized(props.match.date, props.match.time, lang);
+  return (
+    <div className="match-row">
+      <div><div className="match-team left">{props.match.home}</div></div>
+      <div style={{textAlign:"center"}}>
+        <div className="match-vs">{info.timeLabel}</div>
+        <div className="match-meta">
+          <span className="badge">Groep {props.match.group}</span>
+          <span>📍 {props.match.city}</span>
+        </div>
+      </div>
+      <div><div className="match-team right">{props.match.away}</div></div>
+    </div>
+  );
+}
+
+function GroupsView() {
+  return (
+    <div className="groups-grid">
+      {Object.entries(GROUPS).map(function(entry) {
+        const letter = entry[0], teams = entry[1];
+        return (
+          <div key={letter} className="group-card">
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+              <div className="group-letter" style={{margin:0}}>{letter}</div>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:"var(--fg-muted)",letterSpacing:"0.1em"}}>GROEP {letter}</div>
+            </div>
+            {teams.map(function(team) {
+              return (
+                <div key={team} className="group-team">
+                  <span>⚽ {team}</span>
+                  <span style={{color:"var(--fg-muted)",fontSize:12}}>—</span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function KnockoutView() {
+  const { t } = useApp();
+  const stageEmoji = { r16:"🎯", qf:"⚔️", sf:"🔥", thirdp:"🥉", final:"🏆" };
+  return (
+    <div className="card">
+      <div className="card-title">{t.knockout}</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))",gap:16}}>
+        {KNOCKOUT.map(function(k) {
+          return (
+            <div key={k.stage} className="group-card" style={{textAlign:"center"}}>
+              <div style={{fontSize:36,marginBottom:8}}>{stageEmoji[k.stage]}</div>
+              <div className="group-letter" style={{width:"auto",padding:"0 14px"}}>{t[k.stage]}</div>
+              <div style={{color:"var(--fg-muted)",fontSize:13,marginTop:8}}>{k.matches} {k.matches === 1 ? "match" : "matches"}</div>
+              <div style={{fontSize:12,marginTop:6,opacity:0.7}}>TBD</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  RESULTS (countdown)
+// ═══════════════════════════════════════════════════════════════
+function ResultsTab() {
+  const { t } = useApp();
+  const [now, setNow] = useState(Date.now());
+  useEffect(function() {
+    const id = setInterval(function() { setNow(Date.now()); }, 1000);
+    return function() { clearInterval(id); };
+  }, []);
+
+  const diff = WC_START.getTime() - now;
+  const started = diff <= 0;
+  const d = Math.max(0, Math.floor(diff / (1000*60*60*24)));
+  const h = Math.max(0, Math.floor((diff / (1000*60*60)) % 24));
+  const mi = Math.max(0, Math.floor((diff / (1000*60)) % 60));
+  const s = Math.max(0, Math.floor((diff / 1000) % 60));
+
+  return (
+    <div className="countdown-wrap">
+      <img src={PHOTOS.wcPhoto} alt="" className="countdown-wc-bg" onError={function(e){e.target.style.display="none";}} />
+      <div className="countdown-label">{started ? t.started : t.countdownTo}</div>
+      {!started && (
+        <div className="countdown-grid">
+          <div className="countdown-unit"><div className="countdown-num">{String(d).padStart(2,"0")}</div><div className="countdown-unit-label">{t.days}</div></div>
+          <div className="countdown-unit"><div className="countdown-num">{String(h).padStart(2,"0")}</div><div className="countdown-unit-label">{t.hours}</div></div>
+          <div className="countdown-unit"><div className="countdown-num">{String(mi).padStart(2,"0")}</div><div className="countdown-unit-label">{t.minutes}</div></div>
+          <div className="countdown-unit"><div className="countdown-num">{String(s).padStart(2,"0")}</div><div className="countdown-unit-label">{t.seconds}</div></div>
+        </div>
+      )}
+      <div style={{marginTop:24,color:"var(--fg-muted)",fontSize:13,position:"relative"}}>{t.resultsPage}</div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  TEAMS
+// ═══════════════════════════════════════════════════════════════
+function TeamsTab() {
+  const { participants, t, loading } = useApp();
+  if (loading) return <div className="spinner"></div>;
+  if (participants.length === 0) return (
+    <div className="card">
+      <div className="empty-state">
+        <img src={PHOTOS.weghorst} alt="" className="empty-state-photo" onError={function(e){e.target.style.display="none";}} />
+        <div>{t.noTeamsYet}</div>
+      </div>
+    </div>
+  );
+  return (
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(320px, 1fr))",gap:16}}>
+      {participants.map(function(p) { return <TeamCard key={p.id} participant={p} />; })}
+    </div>
+  );
+}
+
+function TeamCard(props) {
+  let spelers = props.participant.spelers;
+  if (typeof spelers === "string") { try { spelers = JSON.parse(spelers); } catch { spelers = []; } }
+  if (!Array.isArray(spelers)) spelers = [];
+  // Each team card gets a different decoration photo based on participant id
+  const decoPhoto = getDecoPhoto(props.participant.id || 0);
+  return (
+    <div className="card register-card">
+      <img src={decoPhoto} alt="" className="deco-photo" onError={function(e){e.target.style.display="none";}} />
+      <div className="card-title" style={{justifyContent:"space-between",display:"flex"}}>
+        <span>{props.participant.teamnaam}</span>
+        <span className="badge">{props.participant.systeem}</span>
+      </div>
+      <div style={{fontSize:13,color:"var(--fg-muted)",marginBottom:10}}>{props.participant.naam}</div>
+      <FormationField spelers={spelers} system={props.participant.systeem} />
+    </div>
+  );
+}
+
+function FormationField(props) {
+  const { t } = useApp();
+  const f = FORMATIONS[props.system] || FORMATIONS["1-4-3-3"];
+  const spelers = props.spelers || [];
+  const keepers = spelers.filter(function(s) { return s.positie === "keeper"; });
+  const defs = spelers.filter(function(s) { return s.positie === "def"; });
+  const mids = spelers.filter(function(s) { return s.positie === "mid"; });
+  const atts = spelers.filter(function(s) { return s.positie === "att"; });
+  const coach = spelers.filter(function(s) { return s.positie === "coach"; })[0];
+
+  function Slot(ps) {
+    return (
+      <div className={"pos-slot " + (ps.sp ? "filled" : "")}>
+        <div className="pos-slot-label">{ps.label}</div>
+        <div className="pos-slot-country">{ps.sp ? ps.sp.land : "—"}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="squad-formation">
+      <div className="pos-row">
+        {atts.map(function(sp, i) { return <Slot key={"a"+i} sp={sp} label={t.pos.att} />; })}
+        {atts.length === 0 && Array(f.att).fill(0).map(function(_, i) { return <Slot key={"ae"+i} label={t.pos.att} />; })}
+      </div>
+      <div className="pos-row">
+        {mids.map(function(sp, i) { return <Slot key={"m"+i} sp={sp} label={t.pos.mid} />; })}
+        {mids.length === 0 && Array(f.mid).fill(0).map(function(_, i) { return <Slot key={"me"+i} label={t.pos.mid} />; })}
+      </div>
+      <div className="pos-row">
+        {defs.map(function(sp, i) { return <Slot key={"d"+i} sp={sp} label={t.pos.def} />; })}
+        {defs.length === 0 && Array(f.def).fill(0).map(function(_, i) { return <Slot key={"de"+i} label={t.pos.def} />; })}
+      </div>
+      <div className="pos-row">
+        {keepers.map(function(sp, i) { return <Slot key={"k"+i} sp={sp} label={t.pos.keeper} />; })}
+        {keepers.length === 0 && <Slot label={t.pos.keeper} />}
+      </div>
+      {coach && (
+        <div className="pos-row" style={{marginTop:12}}>
+          <div className="pos-slot filled" style={{width:130,background:"#FFD700",color:"#18181B"}}>
+            <div className="pos-slot-label">{t.pos.coach}</div>
+            <div className="pos-slot-country">{coach.land}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  REGISTER
+// ═══════════════════════════════════════════════════════════════
+function RegisterTab() {
+  const { t, participants, reloadParticipants } = useApp();
+  const [step, setStep] = useState(1);
+  const [form, setForm] = useState({ naam:"", teamnaam:"", email:"", systeem:"1-4-3-3" });
+  const [spelers, setSpelers] = useState({ keeper:[null], def:[null,null,null,null], mid:[null,null,null], att:[null,null,null], coach:[null] });
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [openPicker, setOpenPicker] = useState(null);
+
+  const deadlinePassed = Date.now() > DEADLINE.getTime();
+  const formation = FORMATIONS[form.systeem];
+
+  const takenCountries = useMemo(function() {
+    const s = new Set();
+    participants.forEach(function(p) {
+      let sp = p.spelers;
+      if (typeof sp === "string") { try { sp = JSON.parse(sp); } catch { sp = []; } }
+      if (Array.isArray(sp)) sp.forEach(function(x) { if (x && x.land) s.add(x.land); });
+    });
+    return s;
+  }, [participants]);
+
+  const selfTaken = useMemo(function() {
+    const s = new Set();
+    Object.values(spelers).forEach(function(arr) {
+      arr.forEach(function(x) { if (x && x.land) s.add(x.land); });
+    });
+    return s;
+  }, [spelers]);
+
+  useEffect(function() {
+    function resizeArr(arr, len) {
+      const a = (arr || []).slice();
+      while (a.length < len) a.push(null);
+      return a.slice(0, len);
+    }
+    setSpelers(function(prev) {
+      return {
+        keeper: resizeArr(prev.keeper, formation.keeper),
+        def:    resizeArr(prev.def, formation.def),
+        mid:    resizeArr(prev.mid, formation.mid),
+        att:    resizeArr(prev.att, formation.att),
+        coach:  resizeArr(prev.coach, 1)
+      };
+    });
+  }, [form.systeem, formation.keeper, formation.def, formation.mid, formation.att]);
+
+  if (deadlinePassed) return <div className="card"><div className="empty-state" style={{color:"var(--orange)"}}>{t.deadlinePassed}</div></div>;
+  if (success) return <div className="card"><div className="success">{t.successReg}</div></div>;
+
+  function handleNext() {
+    setError("");
+    if (!form.naam.trim()) return setError("Vul je naam in");
+    if (!form.teamnaam.trim()) return setError("Vul een teamnaam in");
+    if (!form.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) return setError("Geldig e-mailadres vereist");
+    setStep(2);
+  }
+
+  function pickCountry(pos, index, land) {
+    setSpelers(function(prev) {
+      const next = Object.assign({}, prev);
+      next[pos] = prev[pos].slice();
+      next[pos][index] = { land: land, positie: pos, punten: 0 };
+      return next;
+    });
+    setOpenPicker(null);
+  }
+
+  function removePick(pos, index) {
+    setSpelers(function(prev) {
+      const next = Object.assign({}, prev);
+      next[pos] = prev[pos].slice();
+      next[pos][index] = null;
+      return next;
+    });
+  }
+
+  async function handleSubmit() {
+    setError("");
+    const flat = [].concat(spelers.keeper, spelers.def, spelers.mid, spelers.att, spelers.coach);
+    if (flat.some(function(x) { return !x; })) return setError(t.pickPlayers);
+
+    setSubmitting(true);
+    try {
+      await dbToevoegen({
+        naam: form.naam.trim(),
+        teamnaam: form.teamnaam.trim(),
+        email: form.email.trim(),
+        systeem: form.systeem,
+        spelers: flat
+      });
+      setSuccess(true);
+      await reloadParticipants();
+    } catch (e) {
+      console.error(e);
+      setError("Fout bij inschrijven: " + (e.message || "onbekend"));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="card register-card">
+      <img src={PHOTOS.yamal} alt="" className="deco-photo" onError={function(e){e.target.style.display="none";}} />
+      <div className="step-indicator">
+        <div className={"step-dot " + (step >= 1 ? "active" : "")}>1</div>
+        <div className={"step-line " + (step >= 2 ? "active" : "")}></div>
+        <div className={"step-dot " + (step >= 2 ? "active" : "")}>2</div>
+      </div>
+      <div style={{fontSize:13,color:"var(--fg-muted)",marginBottom:14}}>
+        {t.deadlineBefore} <strong style={{color:"var(--orange)"}}>10 juni 2026</strong>
+      </div>
+
+      {step === 1 && (
+        <React.Fragment>
+          <div className="card-title">{t.register1}</div>
+          <label>{t.name}</label>
+          <input value={form.naam} onChange={function(e){setForm(Object.assign({}, form, {naam:e.target.value}));}} />
+          <label>{t.teamName}</label>
+          <input value={form.teamnaam} onChange={function(e){setForm(Object.assign({}, form, {teamnaam:e.target.value}));}} />
+          <label>{t.email}</label>
+          <input type="email" value={form.email} onChange={function(e){setForm(Object.assign({}, form, {email:e.target.value}));}} />
+          <label>{t.system}</label>
+          <select value={form.systeem} onChange={function(e){setForm(Object.assign({}, form, {systeem:e.target.value}));}}>
+            {Object.keys(FORMATIONS).map(function(k) { return <option key={k} value={k}>{k}</option>; })}
+          </select>
+          {error && <div className="error">{error}</div>}
+          <button className="btn" onClick={handleNext}>{t.next} →</button>
+        </React.Fragment>
+      )}
+
+      {step === 2 && (
+        <React.Fragment>
+          <div className="card-title">{t.register2} — {form.systeem}</div>
+          <div style={{fontSize:13,color:"var(--fg-muted)",marginBottom:10}}>{t.pickPlayers}</div>
+
+          {["att","mid","def","keeper","coach"].map(function(pos) {
+            const posLabel = t.pos[pos];
+            const arr = spelers[pos] || [];
+            const filled = arr.filter(Boolean).length;
+            return (
+              <div key={pos} style={{marginBottom:18}}>
+                <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:"var(--orange)",marginBottom:8}}>
+                  {posLabel}
+                  <span style={{color:"var(--fg-muted)",fontSize:13,marginLeft:8}}>({filled} / {arr.length})</span>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(140px, 1fr))",gap:8}}>
+                  {arr.map(function(x, i) {
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        className="country-btn"
+                        style={x ? {background:"var(--orange)",color:"white",borderColor:"var(--orange)"} : {}}
+                        onClick={function() {
+                          if (x) removePick(pos, i);
+                          else setOpenPicker({ pos: pos, index: i });
+                        }}
+                      >
+                        {x ? x.land + " ✕" : "+ " + t.selectCountry}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+
+          {error && <div className="error">{error}</div>}
+          <div style={{display:"flex",gap:10,marginTop:16,flexWrap:"wrap"}}>
+            <button className="btn btn-outline" onClick={function(){setStep(1);}}>← {t.back}</button>
+            <button className="btn" onClick={handleSubmit} disabled={submitting}>
+              {submitting ? "…" : t.submit}
+            </button>
+          </div>
+        </React.Fragment>
+      )}
+
+      {openPicker && (
+        <CountryPicker
+          taken={new Set([].concat(Array.from(takenCountries), Array.from(selfTaken)))}
+          onPick={function(land) { pickCountry(openPicker.pos, openPicker.index, land); }}
+          onClose={function() { setOpenPicker(null); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CountryPicker(props) {
+  const { t } = useApp();
+  const [q, setQ] = useState("");
+  const filtered = ALL_COUNTRIES.filter(function(c) { return c.toLowerCase().indexOf(q.toLowerCase()) !== -1; });
+
+  return (
+    <div className="modal-backdrop" onClick={props.onClose}>
+      <div className="modal" onClick={function(e){e.stopPropagation();}}>
+        <div className="modal-title">{t.selectCountry}</div>
+        <input placeholder="🔍" value={q} onChange={function(e){setQ(e.target.value);}} autoFocus />
+        <div className="country-grid">
+          {filtered.map(function(c) {
+            const isTaken = props.taken.has(c);
+            return (
+              <button
+                key={c}
+                className="country-btn"
+                disabled={isTaken}
+                title={isTaken ? t.countryTaken : ""}
+                onClick={function(){ if (!isTaken) props.onPick(c); }}
+              >
+                {c}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{marginTop:12,textAlign:"end"}}>
+          <button className="btn btn-outline" onClick={props.onClose}>{t.back}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ADMIN
+// ═══════════════════════════════════════════════════════════════
+function AdminTab() {
+  const { t, participants, reloadParticipants } = useApp();
+  const [authed, setAuthed] = usePersisted("wk26_admin", false);
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState("");
+  const [saving, setSaving] = useState(null);
+  const [savedMsg, setSavedMsg] = useState(null);
+
+  function tryLogin() {
+    if (pw === ADMIN_WACHTWOORD) { setAuthed(true); setErr(""); }
+    else setErr(t.wrongPw);
+  }
+
+  if (!authed) {
+    return (
+      <div className="card">
+        <div className="card-title">{t.adminLogin}</div>
+        <label>{t.password}</label>
+        <input type="password" value={pw} onChange={function(e){setPw(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter") tryLogin();}} />
+        {err && <div className="error">{err}</div>}
+        <button className="btn" onClick={tryLogin}>{t.login}</button>
+      </div>
+    );
+  }
+
+  async function savePoints(p, newSpelers) {
+    setSaving(p.id);
+    try {
+      await dbBijwerkenSpelers(p.id, newSpelers);
+      setSavedMsg(p.id);
+      setTimeout(function() { setSavedMsg(null); }, 2000);
+      await reloadParticipants();
+    } catch (e) {
+      alert("Fout: " + e.message);
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  function exportExcel() {
+    const rows = [];
+    participants.forEach(function(p) {
+      let sp = p.spelers;
+      if (typeof sp === "string") { try { sp = JSON.parse(sp); } catch { sp = []; } }
+      if (!Array.isArray(sp)) sp = [];
+      const totalPts = sp.reduce(function(s, x) { return s + (Number(x.punten) || 0); }, 0);
+      rows.push({
+        Naam: p.naam,
+        Teamnaam: p.teamnaam,
+        Email: p.email,
+        Systeem: p.systeem,
+        TotaalPunten: totalPts,
+        Spelers: sp.map(function(x) { return x.positie + ":" + x.land + "(" + (x.punten || 0) + ")"; }).join(" | ")
+      });
+    });
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "WK2026");
+    XLSX.writeFile(wb, "wk2026_poule.xlsx");
+  }
+
+  return (
+    <div className="card">
+      <div className="card-title" style={{justifyContent:"space-between",display:"flex",flexWrap:"wrap",gap:10}}>
+        <span>{t.adminPanel}</span>
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn" onClick={exportExcel}>📊 {t.exportExcel}</button>
+          <button className="btn btn-outline" onClick={function(){setAuthed(false);}}>{t.logout}</button>
+        </div>
+      </div>
+      {participants.length === 0 ? (
+        <div className="empty-state">{t.noParticipants}</div>
+      ) : (
+        participants.map(function(p) {
+          return (
+            <AdminRow
+              key={p.id}
+              participant={p}
+              onSave={savePoints}
+              saving={saving === p.id}
+              saved={savedMsg === p.id}
+            />
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+function AdminRow(props) {
+  const { t } = useApp();
+  let initial = props.participant.spelers;
+  if (typeof initial === "string") { try { initial = JSON.parse(initial); } catch { initial = []; } }
+  if (!Array.isArray(initial)) initial = [];
+
+  const [local, setLocal] = useState(function() {
+    return initial.map(function(x) { return Object.assign({}, x, { punten: Number(x.punten) || 0 }); });
+  });
+
+  useEffect(function() {
+    setLocal(initial.map(function(x) { return Object.assign({}, x, { punten: Number(x.punten) || 0 }); }));
+  }, [props.participant.id]);
+
+  function updatePts(i, val) {
+    setLocal(function(prev) {
+      return prev.map(function(x, idx) {
+        return idx === i ? Object.assign({}, x, { punten: Number(val) || 0 }) : x;
+      });
+    });
+  }
+
+  const total = local.reduce(function(s, x) { return s + (Number(x.punten) || 0); }, 0);
+
+  return (
+    <div className="group-card" style={{marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
+        <div>
+          <div style={{fontWeight:700}}>{props.participant.teamnaam}</div>
+          <div style={{fontSize:12,color:"var(--fg-muted)"}}>{props.participant.naam} • {props.participant.systeem}</div>
+        </div>
+        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+          <span className="badge">Totaal: {total}</span>
+          <button className="btn" onClick={function(){props.onSave(props.participant, local);}} disabled={props.saving}>
+            {props.saving ? "…" : props.saved ? "✓ " + t.saved : t.save}
+          </button>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(220px, 1fr))",gap:6}}>
+        {local.map(function(sp, i) {
+          return (
+            <div key={i} className="admin-player">
+              <span><strong style={{color:"var(--orange)"}}>{sp.positie}</strong> • {sp.land}</span>
+              <input
+                type="number"
+                className="admin-input-mini"
+                value={sp.punten}
+                onChange={function(e){updatePts(i, e.target.value);}}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  MOUNT
+// ═══════════════════════════════════════════════════════════════
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
