@@ -1,0 +1,50 @@
+# --- Dependencies ---
+node_modules/
+.pnp
+.pnp.js
+
+# --- Next.js Build Artifacts ---
+.next/
+out/
+next-env.d.ts
+
+# --- Node.js & General Build ---
+dist/
+build/
+*.tsbuildinfo
+
+# --- Environment Variables ---
+.env
+.env*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# --- Logs & Debugging ---
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+logs
+*.log
+
+# --- Testing ---
+coverage/
+.nyc_output
+
+# --- Tailwind / CSS ---
+# Tailwind itself doesn't generate files unless you use a custom output path, 
+# but if you use a build tool for CSS:
+.parcel-cache
+.cache
+
+# --- OS / IDE Specific ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
