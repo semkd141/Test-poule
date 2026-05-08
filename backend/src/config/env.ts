@@ -20,6 +20,14 @@ const envSchema = z.object({
   SUPABASE_KEY: z.string().min(1, "SUPABASE_KEY is required"),
   /** Dashboard → API → JWT secret (HS256 access tokens from Supabase Auth). */
   SUPABASE_JWT_SECRET: z.string().min(1, "SUPABASE_JWT_SECRET is required"),
+  API_FOOTBALL_KEY: z.preprocess(
+    (v) => (v === "" || v === undefined ? undefined : v),
+    z.string().min(8).optional(),
+  ),
+  CRON_SECRET: z.preprocess(
+    (v) => (v === "" || v === undefined ? undefined : v),
+    z.string().min(8).optional(),
+  ),
   PARTICIPANT_LEGACY_OPEN_MUTATIONS: boolishLegacy,
   ADMIN_API_SECRET: z.preprocess(
     (v) => (v === "" || v === undefined ? undefined : v),

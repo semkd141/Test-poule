@@ -199,6 +199,89 @@ export class SupabaseGateway {
     return this.parseSuccessBody(r);
   }
 
+  async listParticipantsByCompetition(competitionId: number): Promise<unknown> {
+    const r = await this.request(
+      "db.deelnemers.byCompetition",
+      `${this.dbBase}/deelnemers?competition_id=eq.${encodeURIComponent(String(competitionId))}&select=*&email=not.eq.__config__&order=id`,
+      { headers: this.serviceHeaders() },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  async listFixtureMappings(competitionId: number): Promise<unknown> {
+    const r = await this.request(
+      "db.fixture_mapping.list",
+      `${this.dbBase}/fixture_mappings?competition_id=eq.${encodeURIComponent(String(competitionId))}&select=*&order=local_key`,
+      { headers: this.serviceHeaders() },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  async upsertMatch(body: Record<string, unknown>): Promise<unknown> {
+    const r = await this.request(
+      "db.matches.upsert",
+      `${this.dbBase}/matches?on_conflict=external_fixture_id`,
+      {
+        method: "POST",
+        headers: {
+          ...this.serviceHeaders(),
+          Prefer: "resolution=merge-duplicates,return=representation",
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  async listScorableMatches(competitionId: number): Promise<unknown> {
+    const r = await this.request(
+      "db.matches.scorable",
+      `${this.dbBase}/matches?competition_id=eq.${encodeURIComponent(String(competitionId))}&status=in.(FT,AET,PEN)&select=*&order=kickoff_at.asc`,
+      { headers: this.serviceHeaders() },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  async insertScoreEventIfMissing(
+    participantId: number,
+    matchId: number,
+    eventKey: string,
+    deltaPoints: number,
+  ): Promise<boolean> {
+    const body = {
+      participant_id: participantId,
+      match_id: matchId,
+      event_key: eventKey,
+      delta_points: deltaPoints,
+    };
+    const r = await fetch(`${this.dbBase}/participant_score_events`, {
+      method: "POST",
+      headers: {
+        ...this.serviceHeaders(),
+        Prefer: "resolution=ignore-duplicates,return=representation",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const payload = await this.parseJsonSafe(r);
+      this.log.warn({ participantId, matchId, eventKey, payload }, "score event insert failed");
+      throw new UpstreamHttpError(r.status, payload);
+    }
+    const out = await this.parseSuccessBody(r);
+    return Array.isArray(out) && out.length > 0;
+  }
+
+  async getCompetitionBySlug(slug: string): Promise<Record<string, unknown> | null> {
+    const r = await this.request(
+      "db.competitions.bySlug",
+      `${this.dbBase}/competitions?slug=eq.${encodeURIComponent(slug)}&select=*&limit=1`,
+      { headers: this.serviceHeaders() },
+    );
+    const data = await this.parseSuccessBody(r);
+    if (!Array.isArray(data) || data.length === 0) return null;
+    return data[0] as Record<string, unknown>;
+  }
+
   async createParticipant(body: unknown): Promise<unknown> {
     const r = await this.request(
       "db.deelnemers.insert",
