@@ -12,6 +12,7 @@ export function createParticipantsRouter(gateway: SupabaseGateway, env: Env): Ro
   const gate = participantMutationGate(gateway, env);
 
   router.get("/participants", optionalJwt, handlers.listParticipants);
+  router.get("/leaderboard", optionalJwt, handlers.listLeaderboard);
   router.get("/participants/by-email", optionalJwt, handlers.findParticipantByEmail);
   router.get("/players", handlers.listPlayers);
   router.post("/participants", optionalJwt, handlers.createParticipant);

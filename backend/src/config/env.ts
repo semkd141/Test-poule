@@ -24,6 +24,14 @@ const envSchema = z.object({
     (v) => (v === "" || v === undefined ? undefined : v),
     z.string().min(8).optional(),
   ),
+  RESEND_API_KEY: z.preprocess(
+    (v) => (v === "" || v === undefined ? undefined : v),
+    z.string().min(8).optional(),
+  ),
+  RESEND_FROM_EMAIL: z.preprocess(
+    (v) => (v === "" || v === undefined ? undefined : v),
+    z.string().email().optional(),
+  ),
   CRON_SECRET: z.preprocess(
     (v) => (v === "" || v === undefined ? undefined : v),
     z.string().min(8).optional(),

@@ -321,6 +321,26 @@ export class SupabaseGateway {
     return this.parseSuccessBody(r);
   }
 
+  async patchParticipantAggregates(
+    id: string,
+    totalPoints: number,
+    attackerGoals: number,
+  ): Promise<unknown> {
+    const r = await this.request(
+      "db.deelnemers.patchAggregates",
+      `${this.dbBase}/deelnemers?id=eq.${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        headers: { ...this.serviceHeaders(), Prefer: "return=minimal" },
+        body: JSON.stringify({
+          total_points: totalPoints,
+          attacker_goals: attackerGoals,
+        }),
+      },
+    );
+    return this.parseSuccessBody(r);
+  }
+
   async deleteParticipant(id: string): Promise<void> {
     await this.request(
       "db.deelnemers.delete",

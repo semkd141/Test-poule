@@ -21,6 +21,7 @@ type Pick = {
   punten?: number;
   aanvoerder?: boolean;
   positie?: string;
+  goals?: number;
 };
 
 const BASE_DELTA = 3;
@@ -42,6 +43,23 @@ function winnerTeam(m: MatchRow): string | null {
   if (m.home_goals === null || m.away_goals === null) return null;
   if (m.home_goals === m.away_goals) return null;
   return m.home_goals > m.away_goals ? m.home_team : m.away_team;
+}
+
+function isAttackerPosition(pos: unknown): boolean {
+  const p = String(pos ?? "").toLowerCase();
+  return p === "att" || p === "aanvaller" || p === "forward" || p === "striker";
+}
+
+function computeAggregates(picks: Pick[]): { totalPoints: number; attackerGoals: number } {
+  let totalPoints = 0;
+  let attackerGoals = 0;
+  for (const pick of picks) {
+    totalPoints += Number(pick?.punten) || 0;
+    if (isAttackerPosition(pick?.positie)) {
+      attackerGoals += Number(pick?.goals) || 0;
+    }
+  }
+  return { totalPoints, attackerGoals };
 }
 
 export class ScoringEngine {
@@ -104,6 +122,13 @@ export class ScoringEngine {
           await this.gateway.patchParticipantPlayers(String(p.id), { spelers: JSON.stringify(picks) });
         }
       }
+    }
+
+    // Keep persisted leaderboard metrics in sync, even if no new points were awarded this run.
+    for (const p of participants) {
+      const picks = parsePicks(p.spelers);
+      const agg = computeAggregates(picks);
+      await this.gateway.patchParticipantAggregates(String(p.id), agg.totalPoints, agg.attackerGoals);
     }
 
     return { matches: matches.length, participantsTouched: touched };
