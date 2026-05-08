@@ -19,14 +19,17 @@ import {
   authVerifyOTP,
   authSignOut,
   authGetUser,
+  persistSupabaseSessionToWkStorage,
   getMyDeelnemer,
   dbLees,
   dbLeesSpelers,
   dbToevoegen,
   dbBijwerkenSpelers,
   dbBijwerkenVeld,
+  dbVerwijderParticipant,
 } from "@/lib/wk/api-client";
-import { WC_START, getSupabasePublicUrl, getAdminPassword, buildPhotos } from "@/lib/wk/config";
+import { WC_START, DEFAULT_DEADLINE_LABEL, getSupabasePublicUrl, getAdminPassword, buildPhotos, getSiteUrl } from "@/lib/wk/config";
+import { getSupabaseBrowser } from "@/lib/wk/supabase-browser";
 import { parseConfig } from "@/lib/wk/parse-config";
 import { LANGUAGES, TIMEZONES } from "@/lib/wk/locale";
 import { T } from "@/lib/wk/strings";
@@ -1265,6 +1268,10 @@ function EditMyTeamTab() {
   const [myTeam, setMyTeam] = useState(null);
   const [emailInput, setEmailInput] = useState("");
   const [authError, setAuthError] = useState("");
+  const [authLoginMode, setAuthLoginMode] = useState("magic"); // magic | password | google
+  const [pwEmail, setPwEmail] = useState("");
+  const [pwPassword, setPwPassword] = useState("");
+  const supabaseEnabled = !!(typeof window !== "undefined" && getSupabaseBrowser());
 
   // Edit state
   const [editNaam, setEditNaam] = useState("");
@@ -1290,35 +1297,80 @@ function EditMyTeamTab() {
       .sort(function(a,b){ return a.land.localeCompare(b.land); });
   }, [wkSpelers]);
 
-  // On mount: check for magic link callback (access_token in URL hash) OR existing session
+  useEffect(function() {
+    var sb = getSupabaseBrowser();
+    if (!sb) return undefined;
+    var r = sb.auth.onAuthStateChange(function(_evt, sess) {
+      if (sess && sess.access_token && sess.user) {
+        persistSupabaseSessionToWkStorage({
+          access_token: sess.access_token,
+          refresh_token: sess.refresh_token,
+          expires_at: sess.expires_at,
+          user: sess.user,
+        });
+      }
+    });
+    return function() {
+      if (r && r.data && r.data.subscription) r.data.subscription.unsubscribe();
+    };
+  }, []);
+
+  // On mount: Supabase session, hash callback (Express OTP legacy), or stored session
   useEffect(function() {
     async function init() {
-      const hash = window.location.hash;
-      // Supabase magic link returns #access_token=...&refresh_token=...
-      if (hash && hash.indexOf('access_token=') !== -1) {
-        const params = new URLSearchParams(hash.replace(/^#/, ''));
-        const access_token = params.get('access_token');
-        const refresh_token = params.get('refresh_token');
-        const expires_in = parseInt(params.get('expires_in') || '3600');
-        if (access_token) {
-          // Fetch user info
-          let user = {};
-          try {
-            user = await authGetUser(access_token);
-          } catch(e) {}
-          const sessionData = { access_token, refresh_token, expires_at: Math.floor(Date.now()/1000) + expires_in, user };
-          authSaveSession(sessionData);
-          // Clean URL - go back to #edit
-          window.history.replaceState({}, document.title, window.location.pathname + '#edit');
-          await loadTeamForSession(sessionData);
-          return;
+      try {
+        var sb = getSupabaseBrowser();
+        if (sb) {
+          var gr = await sb.auth.getSession();
+          var session = gr.data.session;
+          if (session && session.access_token && session.user) {
+            persistSupabaseSessionToWkStorage({
+              access_token: session.access_token,
+              refresh_token: session.refresh_token,
+              expires_at: session.expires_at,
+              user: session.user,
+            });
+            window.history.replaceState({}, document.title, window.location.pathname + "#edit");
+            await loadTeamForSession({
+              access_token: session.access_token,
+              refresh_token: session.refresh_token,
+              expires_at: session.expires_at,
+              user: session.user,
+            });
+            return;
+          }
         }
-      }
-      // Check existing session
-      const existing = await authGetValidSession();
-      if (existing && existing.access_token) {
-        await loadTeamForSession(existing);
-      } else {
+
+        var hash = window.location.hash || "";
+        if (hash.indexOf("access_token=") !== -1) {
+          var params = new URLSearchParams(hash.replace(/^#/, ""));
+          var access_token = params.get("access_token");
+          var refresh_token = params.get("refresh_token");
+          var expires_in = parseInt(params.get("expires_in") || "3600");
+          if (access_token) {
+            var user = {};
+            try { user = await authGetUser(access_token); } catch (e0) {}
+            var sessionData = {
+              access_token: access_token,
+              refresh_token: refresh_token || "",
+              expires_at: Math.floor(Date.now() / 1000) + expires_in,
+              user: user,
+            };
+            authSaveSession(sessionData);
+            window.history.replaceState({}, document.title, window.location.pathname + "#edit");
+            await loadTeamForSession(sessionData);
+            return;
+          }
+        }
+
+        var existing = await authGetValidSession();
+        if (existing && existing.access_token) {
+          await loadTeamForSession(existing);
+        } else {
+          setAuthState("unauthenticated");
+        }
+      } catch (e) {
+        console.warn(e);
         setAuthState("unauthenticated");
       }
     }
@@ -1345,12 +1397,74 @@ function EditMyTeamTab() {
     setAuthError("");
     setAuthState("sending");
     try {
-      await authSendMagicLink(emailInput.trim());
+      var email = emailInput.trim();
+      if (!email) {
+        setAuthState("unauthenticated");
+        return;
+      }
+      var sb = getSupabaseBrowser();
+      var base = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
+      var redirect = (getSiteUrl() || base) + "#/edit";
+      if (sb) {
+        var res = await sb.auth.signInWithOtp({
+          email: email,
+          options: { shouldCreateUser: true, emailRedirectTo: redirect },
+        });
+        if (res.error) throw res.error;
+        setAuthState("sent");
+        return;
+      }
+      await authSendMagicLink(email);
       setAuthState("sent");
-    } catch(e) {
-      setAuthError(e.message);
+    } catch (e) {
+      setAuthError(e.message || String(e));
       setAuthState("unauthenticated");
     }
+  }
+
+  async function passwordLogin() {
+    setAuthError("");
+    setAuthState("sending");
+    try {
+      var sb = getSupabaseBrowser();
+      if (!sb) throw new Error("Add NEXT_PUBLIC_SUPABASE_ANON_KEY for email/password sign-in.");
+      var res = await sb.auth.signInWithPassword({
+        email: pwEmail.trim(),
+        password: pwPassword,
+      });
+      if (res.error) throw res.error;
+      var gr = await sb.auth.getSession();
+      var session = gr.data.session;
+      if (!session || !session.access_token) throw new Error("No session after sign-in.");
+      persistSupabaseSessionToWkStorage({
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+        expires_at: session.expires_at,
+        user: session.user,
+      });
+      await loadTeamForSession({
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+        expires_at: session.expires_at,
+        user: session.user,
+      });
+    } catch (e) {
+      setAuthError(e.message || String(e));
+      setAuthState("unauthenticated");
+    }
+  }
+
+  async function googleLogin() {
+    setAuthError("");
+    var sb = getSupabaseBrowser();
+    if (!sb) {
+      setAuthError("Add NEXT_PUBLIC_SUPABASE_ANON_KEY and enable Google in Supabase Auth.");
+      return;
+    }
+    var base = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
+    var redirect = (getSiteUrl() || base) + "#/edit";
+    var res = await sb.auth.signInWithOAuth({ provider: "google", options: { redirectTo: redirect } });
+    if (res.error) setAuthError(res.error.message || String(res.error));
   }
 
   async function signOut() {
@@ -1409,27 +1523,102 @@ function EditMyTeamTab() {
       <div>
         <div className="card-title">My Team</div>
         <div className="card" style={{maxWidth:480}}>
-          <div style={{fontFamily:"var(--wk-heading-font)",fontSize:16,letterSpacing:"0.05em",color:"var(--orange)",marginBottom:8}}>
+          <div style={{fontFamily:"var(--wk-heading-font)",fontSize:16,letterSpacing:"0.05em",color:"var(--orange)",marginBottom:10}}>
             Sign in to edit your team
           </div>
-          <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:16,lineHeight:1.6}}>
-            Enter the email address you used to register. We'll send you a secure login link — no password needed.
-          </p>
-          <label style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",display:"block",marginBottom:6}}>Email address</label>
-          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-            <input
-              type="email"
-              placeholder="your@email.com"
-              value={emailInput}
-              onChange={function(e){ setEmailInput(e.target.value); }}
-              onKeyDown={function(e){ if(e.key==="Enter" && emailInput.trim()) sendMagicLink(); }}
-              style={{flex:1,minWidth:200,margin:0}}
-              disabled={authState === "sending"}
-            />
-            <button className="btn" onClick={sendMagicLink} disabled={authState === "sending" || !emailInput.trim()}>
-              {authState === "sending" ? "Sending…" : "Send login link →"}
-            </button>
+
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
+            <button
+              type="button"
+              className={authLoginMode === "magic" ? "btn" : "btn btn-outline"}
+              onClick={function(){ setAuthLoginMode("magic"); setAuthError(""); }}
+              style={{fontSize:12,padding:"6px 12px"}}
+            >Email link</button>
+            {supabaseEnabled ? (
+              <React.Fragment>
+                <button
+                  type="button"
+                  className={authLoginMode === "password" ? "btn" : "btn btn-outline"}
+                  onClick={function(){ setAuthLoginMode("password"); setAuthError(""); }}
+                  style={{fontSize:12,padding:"6px 12px"}}
+                >Email + password</button>
+                <button
+                  type="button"
+                  className={authLoginMode === "google" ? "btn" : "btn btn-outline"}
+                  onClick={function(){ setAuthLoginMode("google"); setAuthError(""); }}
+                  style={{fontSize:12,padding:"6px 12px"}}
+                >Google</button>
+              </React.Fragment>
+            ) : null}
           </div>
+
+          {!supabaseEnabled ? (
+            <p style={{fontSize:12,color:"var(--fg-muted)",marginBottom:12,lineHeight:1.5}}>
+              Add <code style={{fontSize:11}}>NEXT_PUBLIC_SUPABASE_ANON_KEY</code> to enable Google and email/password. Magic link still works via your API.
+            </p>
+          ) : null}
+
+          {authLoginMode === "magic" ? (
+            <React.Fragment>
+              <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:16,lineHeight:1.6}}>
+                {supabaseEnabled
+                  ? "We’ll email you a one-time link (Supabase Auth). Same email as your team registration."
+                  : "Enter the email you used to register. We’ll send a login link through the API — no password needed."}
+              </p>
+              <label style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",display:"block",marginBottom:6}}>Email address</label>
+              <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                <input
+                  type="email"
+                  placeholder="your@email.com"
+                  value={emailInput}
+                  onChange={function(e){ setEmailInput(e.target.value); }}
+                  onKeyDown={function(e){ if(e.key==="Enter" && emailInput.trim()) sendMagicLink(); }}
+                  style={{flex:1,minWidth:200,margin:0}}
+                  disabled={authState === "sending"}
+                />
+                <button className="btn" onClick={sendMagicLink} disabled={authState === "sending" || !emailInput.trim()}>
+                  {authState === "sending" ? "Sending…" : "Send login link →"}
+                </button>
+              </div>
+            </React.Fragment>
+          ) : authLoginMode === "password" && supabaseEnabled ? (
+            <React.Fragment>
+              <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:16,lineHeight:1.6}}>
+                Use the password for your Supabase Auth account (enable Email provider in Dashboard).
+              </p>
+              <label style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",display:"block",marginBottom:6}}>Email</label>
+              <input
+                type="email"
+                value={pwEmail}
+                onChange={function(e){ setPwEmail(e.target.value); }}
+                style={{margin:"0 0 10px 0",width:"100%",maxWidth:360}}
+                disabled={authState === "sending"}
+              />
+              <label style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",display:"block",marginBottom:6}}>Password</label>
+              <input
+                type="password"
+                value={pwPassword}
+                onChange={function(e){ setPwPassword(e.target.value); }}
+                onKeyDown={function(e){ if(e.key==="Enter" && pwEmail.trim()) passwordLogin(); }}
+                style={{margin:"0 0 14px 0",width:"100%",maxWidth:360}}
+                disabled={authState === "sending"}
+              />
+              <button className="btn" onClick={passwordLogin} disabled={authState === "sending" || !pwEmail.trim()}>
+                {authState === "sending" ? "Signing in…" : "Sign in"}
+              </button>
+            </React.Fragment>
+          ) : supabaseEnabled ? (
+            <React.Fragment>
+              <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:16,lineHeight:1.6}}>
+                Continue with Google (enable provider + OAuth client in Supabase; add redirect URL below to allowed list).
+              </p>
+              <button type="button" className="btn" onClick={googleLogin}>Continue with Google</button>
+              <div style={{fontSize:11,color:"var(--fg-muted)",marginTop:12,lineHeight:1.4}}>
+                Redirect: <code style={{fontSize:10}}>{(typeof window !== "undefined" ? (window.location.origin + window.location.pathname) : "") || getSiteUrl() || "…"}#/edit</code>
+              </div>
+            </React.Fragment>
+          ) : null}
+
           {authError && <div style={{color:"#EF4444",fontSize:13,marginTop:10}}>⚠️ {authError}</div>}
         </div>
       </div>
@@ -2241,12 +2430,11 @@ function AdminRow(props) {
                 onClick={async function(){
                   if (!window.confirm("Verwijder team '" + props.participant.teamnaam + "'? Dit kan niet ongedaan worden gemaakt.")) return;
                   try {
-                    const r = await fetch(DB + "/participants/" + props.participant.id, {
-                      method:"DELETE", headers:HDR
-                    });
-                    if (r.ok && props.onReload) await props.onReload();
-                    else alert("Fout bij verwijderen");
-                  } catch(e){ alert("Fout: " + e.message); }
+                    await dbVerwijderParticipant(props.participant.id);
+                    if (props.onReload) await props.onReload();
+                  } catch (e) {
+                    alert("Fout bij verwijderen: " + (e && e.message ? e.message : String(e)));
+                  }
                 }}
                 title="Team verwijderen"
                 style={{background:"transparent",border:"none",cursor:"pointer",fontSize:13,opacity:0.4,padding:"2px 6px",borderRadius:4,color:"#EF4444"}}

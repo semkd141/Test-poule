@@ -3,6 +3,9 @@
 import React, { createContext, useContext } from "react";
 
 export function computeTotalPoints(p) {
+  if (p && p.totalPoints !== undefined && p.totalPoints !== null) {
+    return Number(p.totalPoints) || 0;
+  }
   let spelers = p.spelers;
   if (typeof spelers === "string") {
     try {

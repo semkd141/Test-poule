@@ -156,6 +156,18 @@ export class SupabaseGateway {
     return this.parseSuccessBody(r);
   }
 
+  async getParticipant(id: string): Promise<Record<string, unknown> | null> {
+    const enc = encodeURIComponent(id);
+    const r = await this.request(
+      "db.deelnemers.byId",
+      `${this.dbBase}/deelnemers?id=eq.${enc}&select=*&limit=1`,
+      { headers: this.serviceHeaders() },
+    );
+    const data = await this.parseSuccessBody(r);
+    if (!Array.isArray(data) || data.length === 0) return null;
+    return data[0] as Record<string, unknown>;
+  }
+
   async findParticipantByEmail(email: string): Promise<unknown> {
     const enc = encodeURIComponent(email);
     const r = await this.request(
@@ -164,6 +176,18 @@ export class SupabaseGateway {
       { headers: this.serviceHeaders() },
     );
     return this.parseSuccessBody(r);
+  }
+
+  async getCompetitionConfigRow(competitionId: string | number): Promise<Record<string, unknown> | null> {
+    const enc = encodeURIComponent(String(competitionId));
+    const r = await this.request(
+      "db.deelnemers.configByCompetition",
+      `${this.dbBase}/deelnemers?competition_id=eq.${enc}&email=eq.__config__&select=*&limit=1`,
+      { headers: this.serviceHeaders() },
+    );
+    const data = await this.parseSuccessBody(r);
+    if (!Array.isArray(data) || data.length === 0) return null;
+    return data[0] as Record<string, unknown>;
   }
 
   async listWkSpelers(): Promise<unknown> {
@@ -188,14 +212,14 @@ export class SupabaseGateway {
     return this.parseSuccessBody(r);
   }
 
-  async patchParticipantPlayers(id: string, spelers: unknown): Promise<unknown> {
+  async patchParticipantPlayers(id: string, payload: Record<string, unknown>): Promise<unknown> {
     const r = await this.request(
       "db.deelnemers.patchPlayers",
       `${this.dbBase}/deelnemers?id=eq.${id}`,
       {
         method: "PATCH",
         headers: { ...this.serviceHeaders(), Prefer: "return=representation" },
-        body: JSON.stringify({ spelers }),
+        body: JSON.stringify(payload),
       },
     );
     return this.parseSuccessBody(r);

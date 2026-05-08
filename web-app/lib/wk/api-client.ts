@@ -1,4 +1,5 @@
 import { getApiBaseUrl } from "./config";
+import { getSupabaseBrowser } from "./supabase-browser";
 
 const jsonHeaders = { "Content-Type": "application/json" };
 
@@ -120,6 +121,12 @@ export async function authGetUser(accessToken: string) {
 
 export async function authSignOut(accessToken: string | undefined) {
   try {
+    const sb = getSupabaseBrowser();
+    if (sb) await sb.auth.signOut();
+  } catch {
+    /* ignore */
+  }
+  try {
     await fetch(`${apiBase()}/auth/logout`, {
       method: "POST",
       headers: { Authorization: `Bearer ${accessToken || ""}` },
@@ -128,6 +135,40 @@ export async function authSignOut(accessToken: string | undefined) {
     /* ignore */
   }
   authClearSession();
+}
+
+/** Copy Supabase-js session into WK local storage so REST calls can send `Authorization: Bearer`. */
+export function persistSupabaseSessionToWkStorage(session: {
+  access_token: string;
+  refresh_token: string;
+  expires_at?: number;
+  expires_in?: number;
+  user: unknown;
+}) {
+  authSaveSession({
+    access_token: session.access_token,
+    refresh_token: session.refresh_token,
+    expires_at: session.expires_at,
+    expires_in: session.expires_in,
+    user: session.user,
+  });
+}
+
+/** Express API: send Supabase access_token if the user is logged in (Supabase client session or legacy WK storage). */
+async function participantAuthHeaders(): Promise<Record<string, string>> {
+  if (typeof window === "undefined") return {};
+  try {
+    const sb = getSupabaseBrowser();
+    if (sb) {
+      const { data } = await sb.auth.getSession();
+      const t = data.session?.access_token;
+      if (t) return { Authorization: `Bearer ${t}` };
+    }
+  } catch {
+    /* ignore */
+  }
+  const s = authLoadSession();
+  return s?.access_token ? { Authorization: `Bearer ${s.access_token}` } : {};
 }
 
 function parseSpelersField(d: { spelers?: unknown }) {
@@ -143,7 +184,10 @@ function parseSpelersField(d: { spelers?: unknown }) {
 }
 
 export async function getMyDeelnemer(email: string) {
-  const r = await fetch(`${apiBase()}/participants/by-email?email=${encodeURIComponent(email)}`, { headers: jsonHeaders });
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(`${apiBase()}/participants/by-email?email=${encodeURIComponent(email)}`, {
+    headers: { ...jsonHeaders, ...bearer },
+  });
   if (!r.ok) return null;
   const data = (await r.json()) as Record<string, unknown>[];
   if (!data?.length) return null;
@@ -153,7 +197,8 @@ export async function getMyDeelnemer(email: string) {
 
 export async function dbLees() {
   try {
-    const r = await fetch(`${apiBase()}/participants`, { headers: jsonHeaders });
+    const bearer = await participantAuthHeaders();
+    const r = await fetch(`${apiBase()}/participants`, { headers: { ...jsonHeaders, ...bearer } });
     if (!r.ok) return [];
     const data = (await r.json()) as Array<{ spelers?: unknown; [k: string]: unknown }>;
     return data.map((d) => ({ ...d, spelers: parseSpelersField(d) }));
@@ -190,6 +235,7 @@ export async function dbToevoegen(deelnemer: {
   systeem?: string;
   spelers?: unknown[];
 }) {
+  const bearer = await participantAuthHeaders();
   const body = {
     naam: deelnemer.naam,
     teamnaam: deelnemer.teamnaam || "",
@@ -199,21 +245,28 @@ export async function dbToevoegen(deelnemer: {
   };
   const r = await fetch(`${apiBase()}/participants`, {
     method: "POST",
-    headers: { ...jsonHeaders, Prefer: "return=representation" },
+    headers: { ...jsonHeaders, ...bearer, Prefer: "return=representation" },
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error(`Insert mislukt: ${r.status}`);
+  if (!r.ok) {
+    const msg = await readErrorBody(r);
+    throw new Error(`Insert mislukt: (${r.status}) ${msg}`);
+  }
   const data = await r.json();
   return Array.isArray(data) ? data[0] : data;
 }
 
 export async function dbBijwerkenSpelers(id: number | string, spelers: unknown[]) {
+  const bearer = await participantAuthHeaders();
   const r = await fetch(`${apiBase()}/participants/${id}/players`, {
     method: "PATCH",
-    headers: jsonHeaders,
+    headers: { ...jsonHeaders, ...bearer },
     body: JSON.stringify({ spelers }),
   });
-  if (!r.ok) throw new Error(`Update mislukt: ${r.status}`);
+  if (!r.ok) {
+    const msg = await readErrorBody(r);
+    throw new Error(`Update mislukt: (${r.status}) ${msg}`);
+  }
 }
 
 export async function dbBijwerkenVeld(
@@ -224,10 +277,26 @@ export async function dbBijwerkenVeld(
   (["naam", "teamnaam", "systeem", "spelers"] as const).forEach((k) => {
     if (fields[k] !== undefined) allowed[k] = fields[k]!;
   });
+  const bearer = await participantAuthHeaders();
   const r = await fetch(`${apiBase()}/participants/${id}`, {
     method: "PATCH",
-    headers: jsonHeaders,
+    headers: { ...jsonHeaders, ...bearer },
     body: JSON.stringify(allowed),
   });
-  if (!r.ok) throw new Error(`Update mislukt: ${r.status}`);
+  if (!r.ok) {
+    const msg = await readErrorBody(r);
+    throw new Error(`Update mislukt: (${r.status}) ${msg}`);
+  }
+}
+
+export async function dbVerwijderParticipant(id: number | string): Promise<void> {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(`${apiBase()}/participants/${id}`, {
+    method: "DELETE",
+    headers: { ...jsonHeaders, ...bearer },
+  });
+  if (!r.ok) {
+    const msg = await readErrorBody(r);
+    throw new Error(`(${r.status}) ${msg}`);
+  }
 }
