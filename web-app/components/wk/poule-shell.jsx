@@ -28,7 +28,7 @@ import {
   dbBijwerkenVeld,
   dbVerwijderParticipant,
 } from "@/lib/wk/api-client";
-import { WC_START, DEFAULT_DEADLINE_LABEL, getSupabasePublicUrl, getAdminPassword, buildPhotos, getSiteUrl } from "@/lib/wk/config";
+import { WC_START, DEFAULT_DEADLINE_LABEL, getSupabasePublicUrl, getAdminPassword, isLegacyAdminPasswordEnabled, buildPhotos, getSiteUrl } from "@/lib/wk/config";
 import { getSupabaseBrowser } from "@/lib/wk/supabase-browser";
 import { parseConfig } from "@/lib/wk/parse-config";
 import { LANGUAGES, TIMEZONES } from "@/lib/wk/locale";
@@ -46,6 +46,7 @@ import { AppCtx, useApp, computeTotalPoints } from "@/components/wk/poule-contex
 
 const PHOTOS = buildPhotos(getSupabasePublicUrl());
 const ADMIN_WACHTWOORD = getAdminPassword();
+const LEGACY_ADMIN_LOGIN_ENABLED = isLegacyAdminPasswordEnabled();
 
 function App() {
   const [theme, setTheme] = usePersisted("wk26_theme", "dark");
@@ -187,6 +188,10 @@ function SettingsModal(props) {
   const [pwErr, setPwErr] = useState("");
 
   function tryLogin() {
+    if (!LEGACY_ADMIN_LOGIN_ENABLED) {
+      setPwErr("Legacy admin password login is disabled. Use JWT admin role or server-side admin secret.");
+      return;
+    }
     if (pw === ADMIN_WACHTWOORD) {
       setAdminMode(true);
       setShowAdminLogin(false);
@@ -263,9 +268,14 @@ function SettingsModal(props) {
 
         {/* ADMIN LOGIN / LOGOUT */}
         <div className="settings-section settings-admin-section">
+          {!LEGACY_ADMIN_LOGIN_ENABLED && !adminMode ? (
+            <div style={{fontSize:12,color:"var(--fg-muted)",lineHeight:1.5}}>
+              Admin password login is deprecated. Use authenticated admin role flows or server-side admin secret.
+            </div>
+          ) : null}
           {!adminMode ? (
             !showAdminLogin ? (
-              <button className="settings-admin-btn" onClick={function(){setShowAdminLogin(true);}}>
+              <button className="settings-admin-btn" onClick={function(){setShowAdminLogin(true);}} disabled={!LEGACY_ADMIN_LOGIN_ENABLED}>
                 🔒 {t.adminLogin || "Beheer login"}
               </button>
             ) : (
@@ -352,10 +362,34 @@ function FloatingDecor() { return null; }
 // ═══════════════════════════════════════════════════════════════
 function RankingTab() {
   const { participants, t, loading } = useApp();
+  function attackerGoalsTieBreak(p) {
+    if (p && p.attacker_goals !== undefined && p.attacker_goals !== null) {
+      return Number(p.attacker_goals) || 0;
+    }
+    var spelers = p && p.spelers;
+    if (typeof spelers === "string") {
+      try { spelers = JSON.parse(spelers); } catch (e) { spelers = []; }
+    }
+    if (!Array.isArray(spelers)) return 0;
+    return spelers.reduce(function(sum, sp) {
+      var pos = String((sp && sp.positie) || "").toLowerCase();
+      var isAtt = pos === "att" || pos === "aanvaller" || pos === "forward" || pos === "striker";
+      return sum + (isAtt ? (Number(sp.goals) || 0) : 0);
+    }, 0);
+  }
   const ranked = useMemo(function() {
     return participants.map(function(p) {
-      return Object.assign({}, p, { totalPts: computeTotalPoints(p) });
-    }).sort(function(a, b) { return b.totalPts - a.totalPts; });
+      return Object.assign({}, p, {
+        totalPts: (p.total_points !== undefined && p.total_points !== null)
+          ? (Number(p.total_points) || 0)
+          : computeTotalPoints(p),
+        attGoalsTie: attackerGoalsTieBreak(p)
+      });
+    }).sort(function(a, b) {
+      if (b.totalPts !== a.totalPts) return b.totalPts - a.totalPts;
+      if (b.attGoalsTie !== a.attGoalsTie) return b.attGoalsTie - a.attGoalsTie;
+      return String(a.teamnaam || "").localeCompare(String(b.teamnaam || ""));
+    });
   }, [participants]);
 
   if (loading) return <div className="spinner"></div>;

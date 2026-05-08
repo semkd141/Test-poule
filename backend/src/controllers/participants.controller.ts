@@ -10,6 +10,7 @@ import {
   type DeelnemerRow,
 } from "../participant/participant-access.js";
 import { isPastCompetitionDeadline } from "../participant/competition-deadline.js";
+import { TransactionalEmailService } from "../services/transactional-email.js";
 
 const emailQuerySchema = z.object({
   email: z.string().min(1, "email query required"),
@@ -44,6 +45,7 @@ function sanitizePatchBody(req: Request, base: Record<string, unknown>): Record<
 
 export type ParticipantsHandlers = {
   listParticipants: ReturnType<typeof asyncHandler>;
+  listLeaderboard: ReturnType<typeof asyncHandler>;
   findParticipantByEmail: ReturnType<typeof asyncHandler>;
   listPlayers: ReturnType<typeof asyncHandler>;
   createParticipant: ReturnType<typeof asyncHandler>;
@@ -103,6 +105,7 @@ function filterRowsBeforeDeadline(rows: Record<string, unknown>[], req: Request)
 }
 
 export function createParticipantsHandlers(gateway: SupabaseGateway, env: Env): ParticipantsHandlers {
+  const mailer = new TransactionalEmailService(env);
   return {
     listParticipants: asyncHandler(async (req: Request, res: Response) => {
       const data = await gateway.listParticipants();
@@ -114,6 +117,35 @@ export function createParticipantsHandlers(gateway: SupabaseGateway, env: Env): 
         return;
       }
       res.json(rows);
+    }),
+
+    listLeaderboard: asyncHandler(async (req: Request, res: Response) => {
+      const data = await gateway.listParticipants();
+      const rows = asRows(data).filter((r) => r.email !== "__config__");
+      const withScores = rows.map((r) => {
+        const fallbackTotal = totalPointsFromSpelers(r.spelers);
+        const totalPoints = Number(r.total_points ?? fallbackTotal) || 0;
+        const picks = parseSpelers(r.spelers);
+        const attackerGoalsFallback = picks.reduce((sum, sp) => {
+          const pos = String(sp.positie ?? "").toLowerCase();
+          const isAtt = pos === "att" || pos === "aanvaller" || pos === "forward" || pos === "striker";
+          return sum + (isAtt ? Number(sp.goals) || 0 : 0);
+        }, 0);
+        const attackerGoals = Number(r.attacker_goals ?? attackerGoalsFallback) || 0;
+        return {
+          id: r.id,
+          naam: r.naam,
+          teamnaam: r.teamnaam,
+          total_points: totalPoints,
+          attacker_goals: attackerGoals,
+        };
+      });
+      withScores.sort((a, b) => {
+        if (b.total_points !== a.total_points) return b.total_points - a.total_points;
+        if (b.attacker_goals !== a.attacker_goals) return b.attacker_goals - a.attacker_goals;
+        return String(a.teamnaam ?? "").localeCompare(String(b.teamnaam ?? ""));
+      });
+      res.json(withScores);
     }),
 
     findParticipantByEmail: asyncHandler(async (req: Request, res: Response) => {
@@ -159,6 +191,14 @@ export function createParticipantsHandlers(gateway: SupabaseGateway, env: Env): 
       const dup = asRows(await gateway.findParticipantByEmail(String(body.email ?? "")));
       if (dup.length > 0) throw new HttpError(409, "This email is already registered");
       const data = await gateway.createParticipant(body);
+      const competitionName = String(body.competition_name ?? "WK 2026 Poule");
+      if (typeof body.email === "string" && body.email.trim()) {
+        try {
+          await mailer.sendSignupConfirmation(body.email.trim(), competitionName);
+        } catch {
+          /* non-blocking: registration succeeds even if email provider is down */
+        }
+      }
       res.json(data);
     }),
 

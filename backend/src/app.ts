@@ -49,7 +49,7 @@ export function createApp(deps: CreateAppDeps): express.Express {
     res.json({ message: "API is running with TypeScript", env: env.NODE_ENV });
   });
 
-  app.use("/api/auth", createAuthRouter(gateway));
+  app.use("/api/auth", optionalBearerSupabaseJwt(env), createAuthRouter(gateway, env));
   app.use("/api", createParticipantsRouter(gateway, env));
   app.use("/api/internal", optionalBearerSupabaseJwt(env), createInternalRouter(gateway, env));
 

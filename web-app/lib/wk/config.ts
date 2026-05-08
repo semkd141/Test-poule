@@ -6,7 +6,8 @@
  * - NEXT_PUBLIC_SUPABASE_URL — public Supabase URL (storage URLs)
  * - NEXT_PUBLIC_SUPABASE_ANON_KEY — Supabase publishable anon key (Auth in the browser)
  * - NEXT_PUBLIC_SITE_URL — origin used in redirect URLs for OAuth/email (e.g. http://localhost:3000)
- * - NEXT_PUBLIC_ADMIN_PASSWORD — client-side admin tab gate (optional override)
+ * - NEXT_PUBLIC_ADMIN_PASSWORD — legacy client-side admin gate (deprecated for production)
+ * - NEXT_PUBLIC_ALLOW_LEGACY_ADMIN_PASSWORD — set true only for temporary migration periods
  */
 
 export const DEFAULT_DEADLINE = "2026-06-10T23:59:59+02:00";
@@ -38,7 +39,16 @@ export function getApiBaseUrl(): string {
 }
 
 export function getAdminPassword(): string {
-  return process.env.NEXT_PUBLIC_ADMIN_PASSWORD || "poule2026";
+  const allowLegacy = String(process.env.NEXT_PUBLIC_ALLOW_LEGACY_ADMIN_PASSWORD || "").toLowerCase() === "true";
+  const envPw = process.env.NEXT_PUBLIC_ADMIN_PASSWORD;
+  if (process.env.NODE_ENV === "production" && !allowLegacy) {
+    return "";
+  }
+  return envPw || "poule2026";
+}
+
+export function isLegacyAdminPasswordEnabled(): boolean {
+  return Boolean(getAdminPassword());
 }
 
 export function buildPhotos(supabaseUrl: string) {
