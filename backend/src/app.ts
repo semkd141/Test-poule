@@ -48,7 +48,7 @@ export function createApp(deps: CreateAppDeps): express.Express {
   });
 
   app.use("/api/auth", createAuthRouter(gateway));
-  app.use("/api", createParticipantsRouter(gateway));
+  app.use("/api", createParticipantsRouter(gateway, env));
 
   app.use(notFoundHandler);
   app.use(createErrorHandler(logger));
