@@ -7,6 +7,8 @@ import type { AppLogger } from "./lib/logger.js";
 import type { SupabaseGateway } from "./services/supabase-gateway.js";
 import { createAuthRouter } from "./routes/auth.routes.js";
 import { createParticipantsRouter } from "./routes/participants.routes.js";
+import { createInternalRouter } from "./routes/internal.routes.js";
+import { optionalBearerSupabaseJwt } from "./middleware/supabase-auth.js";
 import { createErrorHandler } from "./middleware/error-handler.js";
 import { notFoundHandler } from "./middleware/not-found.js";
 
@@ -47,8 +49,9 @@ export function createApp(deps: CreateAppDeps): express.Express {
     res.json({ message: "API is running with TypeScript", env: env.NODE_ENV });
   });
 
-  app.use("/api/auth", createAuthRouter(gateway));
-  app.use("/api", createParticipantsRouter(gateway));
+  app.use("/api/auth", optionalBearerSupabaseJwt(env), createAuthRouter(gateway, env));
+  app.use("/api", createParticipantsRouter(gateway, env));
+  app.use("/api/internal", optionalBearerSupabaseJwt(env), createInternalRouter(gateway, env));
 
   app.use(notFoundHandler);
   app.use(createErrorHandler(logger));
