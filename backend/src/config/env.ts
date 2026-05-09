@@ -18,6 +18,15 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
   SUPABASE_URL: z.string().url(),
   SUPABASE_KEY: z.string().min(1, "SUPABASE_KEY is required"),
+  /**
+   * Service role JWT for PostgREST when the server must read/write any row (bypasses RLS).
+   * Required for reliable participant lookups (e.g. signup-by-email check) if `deelnemers` has RLS.
+   * Dashboard → Project Settings → API → service_role (server-only; never expose to browsers).
+   */
+  SUPABASE_SERVICE_ROLE_KEY: z.preprocess(
+    (v) => (v === "" || v === undefined ? undefined : v),
+    z.string().min(20).optional(),
+  ),
   /** Dashboard → API → JWT secret (HS256 access tokens from Supabase Auth). */
   SUPABASE_JWT_SECRET: z.string().min(1, "SUPABASE_JWT_SECRET is required"),
   API_FOOTBALL_KEY: z.preprocess(
@@ -40,6 +49,11 @@ const envSchema = z.object({
   ADMIN_API_SECRET: z.preprocess(
     (v) => (v === "" || v === undefined ? undefined : v),
     z.string().min(8).optional(),
+  ),
+  /** Optional fixed admin user id (Supabase auth.users.id) with full backend admin authority. */
+  ADMIN_UID: z.preprocess(
+    (v) => (v === "" || v === undefined ? undefined : v),
+    z.string().uuid().optional(),
   ),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])

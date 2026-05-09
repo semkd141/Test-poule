@@ -6,6 +6,7 @@ import { HttpError } from "../shared/http-error.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { ApiFootballClient, type ApiFootballFixture } from "../services/api-football-client.js";
 import { ScoringEngine } from "../services/scoring-engine.js";
+import { z } from "zod";
 
 type FixtureMapRow = {
   id: number;
@@ -15,8 +16,15 @@ type FixtureMapRow = {
 
 function isInternalAuthorized(req: Request, env: Env): boolean {
   if (env.CRON_SECRET && req.get("x-cron-secret") === env.CRON_SECRET) return true;
+  if (env.ADMIN_UID && String(req.supabaseUser?.sub ?? "") === env.ADMIN_UID) return true;
   const role = String(req.supabaseUser?.role ?? "");
-  return role === "service_role" || role === "admin";
+  const appRole = String(
+    (req.supabaseUser as Record<string, unknown> | undefined)?.app_metadata &&
+      typeof (req.supabaseUser as Record<string, unknown>).app_metadata === "object"
+      ? ((req.supabaseUser as Record<string, unknown>).app_metadata as Record<string, unknown>).role ?? ""
+      : "",
+  );
+  return role === "service_role" || role === "admin" || appRole === "admin";
 }
 
 function toMatchPayload(competitionId: number, src: ApiFootballFixture): Record<string, unknown> {
@@ -37,6 +45,101 @@ function toMatchPayload(competitionId: number, src: ApiFootballFixture): Record<
 
 export function createInternalRouter(gateway: SupabaseGateway, env: Env): Router {
   const router = Router();
+
+  const competitionCreateSchema = z.object({
+    slug: z.string().min(2),
+    name: z.string().min(2),
+    season_label: z.preprocess((v) => (v === "" || v === undefined ? undefined : v), z.string().optional()),
+    starts_at: z.preprocess((v) => (v === "" || v === undefined ? undefined : v), z.string().datetime().optional()),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  });
+
+  const competitionPatchSchema = z.object({
+    slug: z.string().min(2).optional(),
+    name: z.string().min(2).optional(),
+    season_label: z.preprocess((v) => (v === "" ? null : v), z.string().nullable().optional()),
+    starts_at: z.preprocess((v) => (v === "" ? null : v), z.string().datetime().nullable().optional()),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  });
+  const mappingQuerySchema = z.object({
+    competitionId: z.coerce.number().int().positive(),
+  });
+  const mappingPatchSchema = z.object({
+    api_fixture_id: z.preprocess(
+      (v) => (v === "" || v === undefined ? null : v),
+      z.coerce.number().int().positive().nullable(),
+    ),
+  });
+
+  router.get(
+    "/competitions",
+    asyncHandler(async (req, res) => {
+      if (!isInternalAuthorized(req, env)) throw new HttpError(401, "Invalid internal authorization");
+      const out = await gateway.listCompetitions();
+      res.json(out);
+    }),
+  );
+
+  router.post(
+    "/competitions",
+    asyncHandler(async (req, res) => {
+      if (!isInternalAuthorized(req, env)) throw new HttpError(401, "Invalid internal authorization");
+      const parsed = competitionCreateSchema.safeParse(req.body);
+      if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
+      const out = await gateway.createCompetition(parsed.data);
+      res.json(out);
+    }),
+  );
+
+  router.patch(
+    "/competitions/:id",
+    asyncHandler(async (req, res) => {
+      if (!isInternalAuthorized(req, env)) throw new HttpError(401, "Invalid internal authorization");
+      const id = String(req.params.id ?? "").trim();
+      if (!id) throw new HttpError(400, "id required");
+      const parsed = competitionPatchSchema.safeParse(req.body);
+      if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
+      const body = parsed.data;
+      if (!Object.keys(body).length) throw new HttpError(400, "No fields to update");
+      const out = await gateway.patchCompetition(id, body);
+      res.json(out);
+    }),
+  );
+
+  router.delete(
+    "/competitions/:id",
+    asyncHandler(async (req, res) => {
+      if (!isInternalAuthorized(req, env)) throw new HttpError(401, "Invalid internal authorization");
+      const id = String(req.params.id ?? "").trim();
+      if (!id) throw new HttpError(400, "id required");
+      await gateway.deleteCompetition(id);
+      res.status(204).send();
+    }),
+  );
+
+  router.get(
+    "/fixture-mappings",
+    asyncHandler(async (req, res) => {
+      if (!isInternalAuthorized(req, env)) throw new HttpError(401, "Invalid internal authorization");
+      const q = mappingQuerySchema.safeParse(req.query);
+      if (!q.success) throw new HttpError(400, "competitionId query required");
+      const out = await gateway.listFixtureMappings(q.data.competitionId);
+      res.json(out);
+    }),
+  );
+
+  router.patch(
+    "/fixture-mappings/:id",
+    asyncHandler(async (req, res) => {
+      if (!isInternalAuthorized(req, env)) throw new HttpError(401, "Invalid internal authorization");
+      const id = String(req.params.id ?? "").trim();
+      if (!id) throw new HttpError(400, "id required");
+      const parsed = mappingPatchSchema.safeParse(req.body);
+      if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
+      const out = await gateway.patchFixtureMapping(id, parsed.data);
+      res.json(out);
+    }),
+  );
 
   router.post(
     "/sync-fixtures",

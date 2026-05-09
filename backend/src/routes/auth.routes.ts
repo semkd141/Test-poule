@@ -9,6 +9,8 @@ export function createAuthRouter(gateway: SupabaseGateway, env: Env): Router {
 
   router.post("/otp", handlers.sendOtp);
   router.post("/verify", handlers.verifyOtp);
+  router.post("/login", handlers.signInWithPassword);
+  router.post("/signup", handlers.signUpWithPassword);
   router.post("/refresh", handlers.refreshSession);
   router.post("/logout", handlers.logout);
   router.get("/user", handlers.getUser);

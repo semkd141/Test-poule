@@ -29,9 +29,13 @@ CREATE TABLE IF NOT EXISTS public.fixture_mappings (
   home_team text,
   away_team text,
   created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (competition_id, local_key),
-  UNIQUE NULLS NOT DISTINCT (competition_id, api_fixture_id)
+  UNIQUE (competition_id, local_key)
 );
+
+-- Many rows may have api_fixture_id NULL until API-Football IDs are filled; only enforce uniqueness when set.
+CREATE UNIQUE INDEX IF NOT EXISTS fixture_mappings_competition_api_fixture_unique
+  ON public.fixture_mappings (competition_id, api_fixture_id)
+  WHERE api_fixture_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS fixture_mappings_competition_idx ON public.fixture_mappings(competition_id);
 

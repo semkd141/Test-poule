@@ -6,6 +6,22 @@ import { asyncHandler } from "../middleware/async-handler.js";
 import { canMutateParticipantRow, type DeelnemerRow } from "../participant/participant-access.js";
 import { isPastCompetitionDeadline } from "../participant/competition-deadline.js";
 
+function isAdminJwt(req: Request, env: Env): boolean {
+  const role = String(req.supabaseUser?.role ?? "");
+  const appRole = String(
+    (req.supabaseUser as Record<string, unknown> | undefined)?.app_metadata &&
+      typeof (req.supabaseUser as Record<string, unknown>).app_metadata === "object"
+      ? ((req.supabaseUser as Record<string, unknown>).app_metadata as Record<string, unknown>).role ?? ""
+      : "",
+  );
+  return (
+    (env.ADMIN_UID && String(req.supabaseUser?.sub ?? "") === env.ADMIN_UID) ||
+    role === "admin" ||
+    role === "service_role" ||
+    appRole === "admin"
+  );
+}
+
 export function participantMutationGate(gateway: SupabaseGateway, env: Env) {
   return asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
     const rawId = req.params.id;
@@ -20,7 +36,7 @@ export function participantMutationGate(gateway: SupabaseGateway, env: Env) {
 
     const adminOk = Boolean(
       env.ADMIN_API_SECRET && req.get("x-admin-secret") === env.ADMIN_API_SECRET,
-    );
+    ) || isAdminJwt(req, env);
 
     const competitionId = (row as Record<string, unknown>).competition_id;
     if (!adminOk && (req.method === "PATCH" || req.method === "DELETE") && competitionId !== undefined && competitionId !== null) {
