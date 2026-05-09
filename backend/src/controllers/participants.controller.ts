@@ -55,7 +55,20 @@ export type ParticipantsHandlers = {
 };
 
 function isAdminBySecret(req: Request, env: Env): boolean {
-  return Boolean(env.ADMIN_API_SECRET && req.get("x-admin-secret") === env.ADMIN_API_SECRET);
+  const role = String(req.supabaseUser?.role ?? "");
+  const appRole = String(
+    (req.supabaseUser as Record<string, unknown> | undefined)?.app_metadata &&
+      typeof (req.supabaseUser as Record<string, unknown>).app_metadata === "object"
+      ? ((req.supabaseUser as Record<string, unknown>).app_metadata as Record<string, unknown>).role ?? ""
+      : "",
+  );
+  return Boolean(
+    (env.ADMIN_API_SECRET && req.get("x-admin-secret") === env.ADMIN_API_SECRET) ||
+      (env.ADMIN_UID && String(req.supabaseUser?.sub ?? "") === env.ADMIN_UID) ||
+      role === "admin" ||
+      role === "service_role" ||
+      appRole === "admin",
+  );
 }
 
 function asRows(data: unknown): Record<string, unknown>[] {
@@ -80,6 +93,14 @@ function parseSpelers(raw: unknown): Record<string, unknown>[] {
 
 function totalPointsFromSpelers(raw: unknown): number {
   return parseSpelers(raw).reduce((sum, sp) => sum + (Number(sp.punten) || 0), 0);
+}
+
+function attackerGoalsFromSpelers(raw: unknown): number {
+  return parseSpelers(raw).reduce((sum, sp) => {
+    const pos = String(sp.positie ?? "").toLowerCase();
+    const isAtt = pos === "att" || pos === "aanvaller" || pos === "forward" || pos === "striker";
+    return sum + (isAtt ? Number(sp.goals) || 0 : 0);
+  }, 0);
 }
 
 function redactForPublicSummary(row: Record<string, unknown>): Record<string, unknown> {
@@ -112,7 +133,13 @@ export function createParticipantsHandlers(gateway: SupabaseGateway, env: Env): 
       const rows = asRows(data);
       const cfgRow = rows.find((r) => r.email === "__config__") ?? null;
       const beforeDeadline = !isPastCompetitionDeadline(cfgRow);
-      if (beforeDeadline && !isAdminBySecret(req, env)) {
+      // Privacy: hide other squads before deadline unless caller is admin or legacy-open mode.
+      // When PARTICIPANT_LEGACY_OPEN_MUTATIONS is true (default), full spelers are returned for Teams tab / dev.
+      if (
+        beforeDeadline &&
+        !isAdminBySecret(req, env) &&
+        !env.PARTICIPANT_LEGACY_OPEN_MUTATIONS
+      ) {
         res.json(filterRowsBeforeDeadline(rows, req));
         return;
       }
@@ -211,6 +238,11 @@ export function createParticipantsHandlers(gateway: SupabaseGateway, env: Env): 
 
       const payload = sanitizePatchBody(req, { spelers: body.data.spelers });
       const data = await gateway.patchParticipantPlayers(params.data.id, payload);
+      const updatedRow = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
+      const spelersSource = updatedRow?.spelers ?? body.data.spelers;
+      const totalPoints = totalPointsFromSpelers(spelersSource);
+      const attackerGoals = attackerGoalsFromSpelers(spelersSource);
+      await gateway.patchParticipantAggregates(params.data.id, totalPoints, attackerGoals);
       res.json(data);
     }),
 

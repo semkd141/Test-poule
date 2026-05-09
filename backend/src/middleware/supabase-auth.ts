@@ -19,6 +19,7 @@ export function resolveSupabaseAuthContext(env: Pick<Env, "SUPABASE_URL" | "SUPA
         const payload = await verifySupabaseAccessToken(raw, {
           jwtSecret: env.SUPABASE_JWT_SECRET,
           issuer,
+          projectUrl: env.SUPABASE_URL,
         });
         req.supabaseUser = payload;
       } catch {
@@ -33,6 +34,7 @@ export function resolveSupabaseAuthContext(env: Pick<Env, "SUPABASE_URL" | "SUPA
         req.supabaseUser = await verifySupabaseAccessToken(raw, {
           jwtSecret: env.SUPABASE_JWT_SECRET,
           issuer,
+          projectUrl: env.SUPABASE_URL,
         });
       } catch {
         throw new HttpError(401, "Invalid or expired access token");

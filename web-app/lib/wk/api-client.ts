@@ -10,8 +10,20 @@ function apiBase() {
 async function readErrorBody(r: Response): Promise<string> {
   const t = await r.text();
   try {
-    const j = JSON.parse(t) as { error?: string; message?: string; msg?: string };
-    return j.error || j.message || j.msg || t || r.statusText;
+    const j = JSON.parse(t) as {
+      error_description?: string;
+      error?: string;
+      message?: string;
+      msg?: string;
+    };
+    return (
+      j.error_description ||
+      j.message ||
+      j.msg ||
+      j.error ||
+      t ||
+      r.statusText
+    );
   } catch {
     return t.slice(0, 300) || r.statusText;
   }
@@ -31,6 +43,130 @@ export async function authSendMagicLink(email: string): Promise<boolean> {
     throw new Error(`(${r.status}) ${msg}`);
   }
   return true;
+}
+
+/** Email + password → Express `/auth/login` → Supabase password grant; stores session like OTP flow. */
+export async function authSignInWithPassword(email: string, password: string): Promise<{
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+  expires_at?: number;
+  token_type?: string;
+  user?: unknown;
+}> {
+  const r = await fetch(`${apiBase()}/auth/login`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ email: email.trim(), password }),
+  });
+  if (!r.ok) {
+    const msg = await readErrorBody(r);
+    throw new Error(`(${r.status}) ${msg}`);
+  }
+  const data = (await r.json()) as {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+    expires_at?: number;
+    token_type?: string;
+    user?: unknown;
+  };
+  if (!data.access_token) {
+    throw new Error("Login response missing access_token");
+  }
+  authSaveSession(data);
+  return data as {
+    access_token: string;
+    refresh_token?: string;
+    expires_in?: number;
+    expires_at?: number;
+    token_type?: string;
+    user?: unknown;
+  };
+}
+
+/** Parses Supabase /signup variants: flat tokens, or nested `session`. */
+function extractTokensFromSignupBody(data: Record<string, unknown>): {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+  expires_at?: number;
+  user: unknown;
+} | null {
+  if (typeof data.access_token === "string") {
+    return {
+      access_token: data.access_token,
+      refresh_token: typeof data.refresh_token === "string" ? data.refresh_token : undefined,
+      expires_in: typeof data.expires_in === "number" ? data.expires_in : undefined,
+      expires_at: typeof data.expires_at === "number" ? data.expires_at : undefined,
+      user: data.user ?? {},
+    };
+  }
+  const session = data.session;
+  if (session && typeof session === "object" && !Array.isArray(session)) {
+    const s = session as Record<string, unknown>;
+    if (typeof s.access_token === "string") {
+      return {
+        access_token: s.access_token,
+        refresh_token: typeof s.refresh_token === "string" ? s.refresh_token : undefined,
+        expires_in: typeof s.expires_in === "number" ? s.expires_in : undefined,
+        expires_at: typeof s.expires_at === "number" ? s.expires_at : undefined,
+        user: data.user ?? {},
+      };
+    }
+  }
+  return null;
+}
+
+/** Email/password signup → Express `/auth/signup` → Supabase. Session only if confirmations are off or user can sign in immediately. */
+export async function authSignUp(
+  email: string,
+  password: string,
+  redirectTo?: string,
+): Promise<
+  | {
+      hasSession: true;
+      access_token: string;
+      refresh_token: string;
+      expires_at: number;
+      user: unknown;
+    }
+  | { hasSession: false }
+> {
+  const body: Record<string, string> = { email: email.trim(), password };
+  if (redirectTo?.trim()) body.redirect_to = redirectTo.trim();
+
+  const r = await fetch(`${apiBase()}/auth/signup`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const msg = await readErrorBody(r);
+    throw new Error(`(${r.status}) ${msg}`);
+  }
+  const data = (await r.json()) as Record<string, unknown>;
+  const extracted = extractTokensFromSignupBody(data);
+  if (!extracted) return { hasSession: false };
+
+  var expiresAt =
+    extracted.expires_at ??
+    Math.floor(Date.now() / 1000) + (typeof extracted.expires_in === "number" ? extracted.expires_in : 3600);
+
+  authSaveSession({
+    access_token: extracted.access_token,
+    refresh_token: extracted.refresh_token,
+    expires_at: expiresAt,
+    user: extracted.user,
+  });
+
+  return {
+    hasSession: true,
+    access_token: extracted.access_token,
+    refresh_token: extracted.refresh_token || "",
+    expires_at: expiresAt,
+    user: extracted.user,
+  };
 }
 
 export function authSaveSession(data: { access_token?: string; refresh_token?: string; expires_at?: number; expires_in?: number; user?: unknown }) {
@@ -154,20 +290,25 @@ export function persistSupabaseSessionToWkStorage(session: {
   });
 }
 
-/** Express API: send Supabase access_token if the user is logged in (Supabase client session or legacy WK storage). */
+/** Express API: send Supabase access_token if the user is logged in (Supabase client session or WK storage). Refreshes when stale so POST /participants does not get 401 from invalid/expired JWTs. */
 async function participantAuthHeaders(): Promise<Record<string, string>> {
   if (typeof window === "undefined") return {};
   try {
     const sb = getSupabaseBrowser();
     if (sb) {
       const { data } = await sb.auth.getSession();
-      const t = data.session?.access_token;
+      let t = data.session?.access_token;
+      const exp = data.session?.expires_at;
+      if (t && typeof exp === "number" && Math.floor(Date.now() / 1000) >= exp - 60) {
+        const { data: ref } = await sb.auth.refreshSession();
+        if (ref.session?.access_token) t = ref.session.access_token;
+      }
       if (t) return { Authorization: `Bearer ${t}` };
     }
   } catch {
     /* ignore */
   }
-  const s = authLoadSession();
+  const s = await authGetValidSession();
   return s?.access_token ? { Authorization: `Bearer ${s.access_token}` } : {};
 }
 
@@ -299,4 +440,64 @@ export async function dbVerwijderParticipant(id: number | string): Promise<void>
     const msg = await readErrorBody(r);
     throw new Error(`(${r.status}) ${msg}`);
   }
+}
+
+export async function adminListCompetitions() {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(`${apiBase()}/internal/competitions`, {
+    headers: { ...jsonHeaders, ...bearer },
+  });
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  const data = await r.json();
+  return Array.isArray(data) ? data : [];
+}
+
+export async function adminCreateCompetition(body: {
+  slug: string;
+  name: string;
+  season_label?: string;
+  starts_at?: string;
+  metadata?: Record<string, unknown>;
+}) {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(`${apiBase()}/internal/competitions`, {
+    method: "POST",
+    headers: { ...jsonHeaders, ...bearer },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  return await r.json();
+}
+
+export async function adminDeleteCompetition(id: number | string): Promise<void> {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(`${apiBase()}/internal/competitions/${id}`, {
+    method: "DELETE",
+    headers: { ...jsonHeaders, ...bearer },
+  });
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+}
+
+export async function adminListFixtureMappings(competitionId: number | string) {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(`${apiBase()}/internal/fixture-mappings?competitionId=${encodeURIComponent(String(competitionId))}`, {
+    headers: { ...jsonHeaders, ...bearer },
+  });
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  const data = await r.json();
+  return Array.isArray(data) ? data : [];
+}
+
+export async function adminUpdateFixtureMapping(
+  id: number | string,
+  api_fixture_id: number | null,
+) {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(`${apiBase()}/internal/fixture-mappings/${id}`, {
+    method: "PATCH",
+    headers: { ...jsonHeaders, ...bearer },
+    body: JSON.stringify({ api_fixture_id }),
+  });
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  return await r.json();
 }

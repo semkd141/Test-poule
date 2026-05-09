@@ -6,8 +6,7 @@
  * - NEXT_PUBLIC_SUPABASE_URL — public Supabase URL (storage URLs)
  * - NEXT_PUBLIC_SUPABASE_ANON_KEY — Supabase publishable anon key (Auth in the browser)
  * - NEXT_PUBLIC_SITE_URL — origin used in redirect URLs for OAuth/email (e.g. http://localhost:3000)
- * - NEXT_PUBLIC_ADMIN_PASSWORD — legacy client-side admin gate (deprecated for production)
- * - NEXT_PUBLIC_ALLOW_LEGACY_ADMIN_PASSWORD — set true only for temporary migration periods
+ * - NEXT_PUBLIC_ADMIN_UID — admin auth.users.id required for frontend admin mode
  */
 
 export const DEFAULT_DEADLINE = "2026-06-10T23:59:59+02:00";
@@ -34,21 +33,27 @@ export function getSiteUrl(): string | undefined {
   return typeof window !== "undefined" ? window.location.origin.replace(/\/$/, "") : undefined;
 }
 
+/**
+ * `emailRedirectTo` / OAuth `redirectTo` for Supabase Auth.
+ * Must be a plain https? URL with no `#fragment` — GoTrue rejects or mishandles redirects
+ * that embed hash routes (often surfacing as 500s on `/auth/v1/otp` or broken magic links).
+ */
+export function getSupabaseAuthRedirectOrigin(): string {
+  const site = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  if (site?.startsWith("http")) return site.replace(/\/$/, "");
+  if (typeof window !== "undefined") return window.location.origin.replace(/\/$/, "");
+  return "";
+}
+
 export function getApiBaseUrl(): string {
   return process.env.NEXT_PUBLIC_API_BASE || "http://localhost:4000/api";
 }
 
-export function getAdminPassword(): string {
-  const allowLegacy = String(process.env.NEXT_PUBLIC_ALLOW_LEGACY_ADMIN_PASSWORD || "").toLowerCase() === "true";
-  const envPw = process.env.NEXT_PUBLIC_ADMIN_PASSWORD;
-  if (process.env.NODE_ENV === "production" && !allowLegacy) {
-    return "";
-  }
-  return envPw || "poule2026";
-}
-
-export function isLegacyAdminPasswordEnabled(): boolean {
-  return Boolean(getAdminPassword());
+export function getAdminUid(): string {
+  return (
+    process.env.NEXT_PUBLIC_ADMIN_UID?.trim() ||
+    "9d038a42-843f-4aa2-8462-5284431b628d"
+  );
 }
 
 export function buildPhotos(supabaseUrl: string) {

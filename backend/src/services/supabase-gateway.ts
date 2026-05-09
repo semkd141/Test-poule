@@ -1,6 +1,8 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Env } from "../config/env.js";
 import type { AppLogger } from "../lib/logger.js";
 import { UpstreamHttpError } from "../shared/upstream-error.js";
+import { createSupabaseAdmin } from "./supabase-admin.js";
 
 type FetchInit = RequestInit;
 
@@ -11,6 +13,8 @@ type FetchInit = RequestInit;
 export class SupabaseGateway {
   private readonly dbBase: string;
   private readonly authBase: string;
+  /** Lazily created; null if {@link Env.SUPABASE_SERVICE_ROLE_KEY} is unset. */
+  private supabaseAdminClient: SupabaseClient | null | undefined;
 
   constructor(
     private readonly env: Env,
@@ -19,15 +23,35 @@ export class SupabaseGateway {
     const base = env.SUPABASE_URL.replace(/\/$/, "");
     this.dbBase = `${base}/rest/v1`;
     this.authBase = `${base}/auth/v1`;
+    if (!env.SUPABASE_SERVICE_ROLE_KEY) {
+      this.log.warn(
+        "SUPABASE_SERVICE_ROLE_KEY is unset. With Row Level Security on `deelnemers`, PostgREST queries using only the anon/publishable SUPABASE_KEY may return zero rows for other users' emails — password signup will falsely say no team registration exists. Add the service_role key from Supabase Dashboard → API.",
+      );
+    }
   }
 
+  /** Auth Admin (`auth.admin.*`) via `@supabase/supabase-js` + service role key. */
+  private supabaseAdmin(): SupabaseClient | null {
+    if (this.supabaseAdminClient !== undefined) return this.supabaseAdminClient;
+    const client = createSupabaseAdmin(this.env);
+    this.supabaseAdminClient = client;
+    return client;
+  }
+
+  /** PostgREST: use service role when set so server reads/writes are not blocked by RLS. User JWT requests keep anon apikey + Bearer user. */
   private serviceHeaders(accessToken?: string): Record<string, string> {
+    if (accessToken) {
+      return {
+        "Content-Type": "application/json",
+        apikey: this.env.SUPABASE_KEY,
+        Authorization: `Bearer ${accessToken}`,
+      };
+    }
+    const key = this.env.SUPABASE_SERVICE_ROLE_KEY ?? this.env.SUPABASE_KEY;
     return {
       "Content-Type": "application/json",
-      apikey: this.env.SUPABASE_KEY,
-      Authorization: accessToken
-        ? `Bearer ${accessToken}`
-        : `Bearer ${this.env.SUPABASE_KEY}`,
+      apikey: key,
+      Authorization: `Bearer ${key}`,
     };
   }
 
@@ -80,6 +104,101 @@ export class SupabaseGateway {
           apikey: this.env.SUPABASE_KEY,
         },
         body: JSON.stringify({ email, create_user: true }),
+      },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  async signInWithPassword(email: string, password: string): Promise<unknown> {
+    const r = await this.request(
+      "auth.password",
+      `${this.authBase}/token?grant_type=password`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: this.env.SUPABASE_KEY,
+        },
+        body: JSON.stringify({ email, password }),
+      },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  /**
+   * Uses GoTrue `GET /admin/users?filter=…` (service role). The JS client's `listUsers()`
+   * does not pass `filter`, so we keep this HTTP call; {@link adminDeleteUser} uses `auth.admin` instead.
+   */
+  async lookupAuthUserByEmail(email: string): Promise<"exists" | "absent" | "unavailable"> {
+    if (!this.supabaseAdmin()) return "unavailable";
+
+    const trimmed = email.trim();
+    const filter = encodeURIComponent(trimmed);
+    const serviceKey = this.env.SUPABASE_SERVICE_ROLE_KEY!;
+    const url = `${this.authBase}/admin/users?page=1&per_page=100&filter=${filter}`;
+    const started = Date.now();
+    this.log.debug({ label: "auth.admin.users", method: "GET" }, "upstream request");
+
+    let r: globalThis.Response;
+    try {
+      r = await fetch(url, {
+        method: "GET",
+        headers: {
+          apikey: serviceKey,
+          Authorization: `Bearer ${serviceKey}`,
+        },
+      });
+    } catch (e) {
+      this.log.warn({ err: e }, "auth admin users request failed");
+      return "unavailable";
+    }
+
+    const ms = Date.now() - started;
+    if (!r.ok) {
+      const payload = await this.parseJsonSafe(r);
+      this.log.warn({ status: r.status, ms, payload }, "auth admin users lookup failed");
+      return "unavailable";
+    }
+
+    const data = (await this.parseJsonSafe(r)) as Record<string, unknown>;
+    const rows = Array.isArray(data.users) ? data.users : [];
+    const needle = trimmed.toLowerCase();
+    for (const u of rows) {
+      if (u && typeof u === "object" && !Array.isArray(u)) {
+        const em = String((u as Record<string, unknown>).email ?? "").toLowerCase();
+        if (em === needle) return "exists";
+      }
+    }
+    return "absent";
+  }
+
+  /** Removes an Auth user via `supabase.auth.admin.deleteUser` (service role). Logs on failure; does not throw. */
+  async adminDeleteUser(userId: string): Promise<void> {
+    const admin = this.supabaseAdmin();
+    if (!admin) {
+      this.log.warn("adminDeleteUser skipped: SUPABASE_SERVICE_ROLE_KEY unset");
+      return;
+    }
+    const { error } = await admin.auth.admin.deleteUser(userId);
+    if (error) {
+      this.log.warn({ userId, message: error.message, status: error.status }, "auth.admin.deleteUser failed");
+    }
+  }
+
+  async signUpWithPassword(email: string, password: string, redirectTo?: string): Promise<unknown> {
+    const body: Record<string, unknown> = { email, password };
+    // Confirmation/magic-link URLs must match Dashboard → Auth → Redirect URLs
+    if (redirectTo) body.redirect_to = redirectTo;
+    const r = await this.request(
+      "auth.signup",
+      `${this.authBase}/signup`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: this.env.SUPABASE_KEY,
+        },
+        body: JSON.stringify(body),
       },
     );
     return this.parseSuccessBody(r);
@@ -169,10 +288,11 @@ export class SupabaseGateway {
   }
 
   async findParticipantByEmail(email: string): Promise<unknown> {
-    const enc = encodeURIComponent(email);
+    const enc = encodeURIComponent(email.trim());
+    // ilike = case-insensitive match (eq. on text is case-sensitive and breaks lookups vs registration casing)
     const r = await this.request(
       "db.deelnemers.byEmail",
-      `${this.dbBase}/deelnemers?email=eq.${enc}&email=not.eq.__config__&limit=1`,
+      `${this.dbBase}/deelnemers?email=ilike.${enc}&email=not.eq.__config__&limit=1`,
       { headers: this.serviceHeaders() },
     );
     return this.parseSuccessBody(r);
@@ -213,6 +333,22 @@ export class SupabaseGateway {
       "db.fixture_mapping.list",
       `${this.dbBase}/fixture_mappings?competition_id=eq.${encodeURIComponent(String(competitionId))}&select=*&order=local_key`,
       { headers: this.serviceHeaders() },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  async patchFixtureMapping(
+    id: string,
+    body: { api_fixture_id?: number | null },
+  ): Promise<unknown> {
+    const r = await this.request(
+      "db.fixture_mapping.patch",
+      `${this.dbBase}/fixture_mappings?id=eq.${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        headers: { ...this.serviceHeaders(), Prefer: "return=representation" },
+        body: JSON.stringify(body),
+      },
     );
     return this.parseSuccessBody(r);
   }
@@ -280,6 +416,52 @@ export class SupabaseGateway {
     const data = await this.parseSuccessBody(r);
     if (!Array.isArray(data) || data.length === 0) return null;
     return data[0] as Record<string, unknown>;
+  }
+
+  async listCompetitions(): Promise<unknown> {
+    const r = await this.request(
+      "db.competitions.list",
+      `${this.dbBase}/competitions?select=*&order=id`,
+      { headers: this.serviceHeaders() },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  async createCompetition(body: Record<string, unknown>): Promise<unknown> {
+    const r = await this.request(
+      "db.competitions.insert",
+      `${this.dbBase}/competitions`,
+      {
+        method: "POST",
+        headers: { ...this.serviceHeaders(), Prefer: "return=representation" },
+        body: JSON.stringify(body),
+      },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  async patchCompetition(id: string, body: Record<string, unknown>): Promise<unknown> {
+    const r = await this.request(
+      "db.competitions.patch",
+      `${this.dbBase}/competitions?id=eq.${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        headers: { ...this.serviceHeaders(), Prefer: "return=representation" },
+        body: JSON.stringify(body),
+      },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  async deleteCompetition(id: string): Promise<void> {
+    await this.request(
+      "db.competitions.delete",
+      `${this.dbBase}/competitions?id=eq.${encodeURIComponent(id)}`,
+      {
+        method: "DELETE",
+        headers: { ...this.serviceHeaders(), Prefer: "return=minimal" },
+      },
+    );
   }
 
   async createParticipant(body: unknown): Promise<unknown> {
