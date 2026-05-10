@@ -13,10 +13,11 @@ import {
   adminListFixtureMappings,
   adminUpdateFixtureMapping,
 } from "../../../../lib/wk/api-client";
+import { toastError } from "../../../../lib/wk/toast";
 import { AdminRow } from "./admin-row.jsx";
 
 export function AdminTab() {
-  const { t, participants, config, reloadParticipants, setAdminMode, setTab } = useApp();
+  const { t, participants, config, reloadParticipants, setTab } = useApp();
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [confirmDeleteCompetition, setConfirmDeleteCompetition] = useState(null);
   const [adminChildTab, setAdminChildTab] = useState("points");
@@ -98,14 +99,13 @@ export function AdminTab() {
       setTimeout(function(){ setDeadlineSaved(false); }, 2500);
       await reloadParticipants();
     } catch (e) {
-      alert("Fout: " + e.message);
+      toastError("Fout: " + e.message);
     } finally {
       setSavingDeadline(false);
     }
   }
 
   function doLogout() {
-    setAdminMode(false);
     setTab("ranking");
     setConfirmLogout(false);
   }
@@ -137,7 +137,7 @@ export function AdminTab() {
 
   async function createCompetition() {
     if (!newCompetition.slug.trim() || !newCompetition.name.trim()) {
-      alert("Slug and name are required.");
+      toastError("Slug and name are required.");
       return;
     }
     setCompetitionBusy(true);
@@ -151,7 +151,7 @@ export function AdminTab() {
       setNewCompetition({ slug: "", name: "", season_label: "", starts_at: "" });
       await loadCompetitions();
     } catch (e) {
-      alert("Create competition failed: " + (e.message || "unknown"));
+      toastError("Create competition failed: " + (e.message || "unknown"));
     } finally {
       setCompetitionBusy(false);
     }
@@ -166,7 +166,7 @@ export function AdminTab() {
       await reloadParticipants();
       setConfirmDeleteCompetition(null);
     } catch (e) {
-      alert("Delete competition failed: " + (e.message || "unknown"));
+      toastError("Delete competition failed: " + (e.message || "unknown"));
     } finally {
       setCompetitionBusy(false);
     }
@@ -176,7 +176,7 @@ export function AdminTab() {
     const val = String(valueRaw ?? "").trim();
     const nextId = val ? Number(val) : null;
     if (nextId !== null && (!Number.isInteger(nextId) || nextId <= 0)) {
-      alert("api_fixture_id must be a positive integer.");
+      toastError("api_fixture_id must be a positive integer.");
       return;
     }
     if (nextId !== null) {
@@ -184,7 +184,7 @@ export function AdminTab() {
         return Number(x.id) !== Number(row.id) && Number(x.api_fixture_id || 0) === nextId;
       });
       if (dup) {
-        alert("This fixture id is already mapped to another local key in this competition.");
+        toastError("This fixture id is already mapped to another local key in this competition.");
         return;
       }
     }
@@ -194,7 +194,7 @@ export function AdminTab() {
       const rows = await adminListFixtureMappings(selectedCompetitionId);
       setFixtureMappings(rows);
     } catch (e) {
-      alert("Update mapping failed: " + (e.message || "unknown"));
+      toastError("Update mapping failed: " + (e.message || "unknown"));
     } finally {
       setMappingBusyId(null);
     }

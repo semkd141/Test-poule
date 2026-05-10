@@ -7,18 +7,43 @@ import { z } from "zod";
 import {
   canAttachUserOnCreate,
   canMutateParticipantRow,
+  normEmail,
   type DeelnemerRow,
 } from "../participant/participant-access.js";
-import { isPastCompetitionDeadline } from "../participant/competition-deadline.js";
+import {
+  isRegistrationClosedByPoolStart,
+  shouldRedactSquadsBeforePoolStart,
+} from "../participant/competition-deadline.js";
 import { TransactionalEmailService } from "../services/transactional-email.js";
 
 const emailQuerySchema = z.object({
   email: z.string().min(1, "email query required"),
+  competition_id: z.coerce.number().int().positive().optional(),
 });
 
 const idParamSchema = z.object({
   id: z.string().min(1, "id required"),
 });
+
+const competitionIdParamSchema = z.object({
+  competitionId: z.coerce.number().int().positive(),
+});
+
+function resolveJoinCompetitionId(req: Request): number {
+  const p = req.params?.competitionId;
+  if (p !== undefined && p !== null && String(p).trim() !== "") {
+    const parsed = competitionIdParamSchema.safeParse(req.params);
+    if (!parsed.success) throw new HttpError(400, "Invalid competition id");
+    return parsed.data.competitionId;
+  }
+  const body = asObjectBody(req.body);
+  const raw = body.competition_id ?? body.competitionId;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new HttpError(400, "competition_id required");
+  }
+  return n;
+}
 
 const patchPlayersSchema = z.object({
   spelers: z.unknown(),
@@ -47,7 +72,10 @@ export type ParticipantsHandlers = {
   listParticipants: ReturnType<typeof asyncHandler>;
   listLeaderboard: ReturnType<typeof asyncHandler>;
   findParticipantByEmail: ReturnType<typeof asyncHandler>;
+  listPublicCompetitions: ReturnType<typeof asyncHandler>;
+  listMyParticipants: ReturnType<typeof asyncHandler>;
   listPlayers: ReturnType<typeof asyncHandler>;
+  joinCompetition: ReturnType<typeof asyncHandler>;
   createParticipant: ReturnType<typeof asyncHandler>;
   patchParticipantPlayers: ReturnType<typeof asyncHandler>;
   patchParticipant: ReturnType<typeof asyncHandler>;
@@ -76,6 +104,28 @@ function asRows(data: unknown): Record<string, unknown>[] {
   return data.filter((x) => x && typeof x === "object" && !Array.isArray(x)) as Record<string, unknown>[];
 }
 
+function slimPublicCreator(user: Record<string, unknown> | null): {
+  id: string;
+  email: string | null;
+  full_name: string | null;
+} | null {
+  if (!user) return null;
+  const id = user.id;
+  if (typeof id !== "string" || !id.trim()) return null;
+  const email = typeof user.email === "string" ? user.email : null;
+  const metaRaw = user.user_metadata;
+  const meta =
+    metaRaw && typeof metaRaw === "object" && !Array.isArray(metaRaw)
+      ? (metaRaw as Record<string, unknown>)
+      : {};
+  const full_name =
+    (typeof meta.full_name === "string" && meta.full_name.trim()
+      ? meta.full_name.trim()
+      : null) ||
+    (typeof meta.name === "string" && meta.name.trim() ? meta.name.trim() : null);
+  return { id: id.trim(), email, full_name };
+}
+
 function parseSpelers(raw: unknown): Record<string, unknown>[] {
   if (Array.isArray(raw)) return raw.filter((x) => x && typeof x === "object") as Record<string, unknown>[];
   if (typeof raw === "string") {
@@ -93,6 +143,33 @@ function parseSpelers(raw: unknown): Record<string, unknown>[] {
 
 function totalPointsFromSpelers(raw: unknown): number {
   return parseSpelers(raw).reduce((sum, sp) => sum + (Number(sp.punten) || 0), 0);
+}
+
+async function assertMayRegisterInOwnedCompetition(
+  gateway: SupabaseGateway,
+  body: Record<string, unknown>,
+  jwt: Request["supabaseUser"],
+): Promise<void> {
+  const raw = body.competition_id;
+  if (raw === undefined || raw === null || raw === "") return;
+  const competitionId = Number(raw);
+  if (!Number.isFinite(competitionId) || competitionId <= 0) {
+    throw new HttpError(400, "Invalid competition_id");
+  }
+  const comp = await gateway.getCompetitionById(String(competitionId));
+  if (!comp) throw new HttpError(404, "Competition not found");
+  const owner = comp.owner_user_id;
+  if (owner == null || owner === undefined) return;
+  const uid = jwt?.sub;
+  if (!uid || typeof uid !== "string") throw new HttpError(401, "Authorization required");
+  if (String(owner) === uid) return;
+  const isMember = await gateway.isCompetitionMember(competitionId, uid);
+  if (!isMember) {
+    throw new HttpError(
+      403,
+      "Use the invitation link sent to your email and sign in with that address before registering for this pool.",
+    );
+  }
 }
 
 function attackerGoalsFromSpelers(raw: unknown): number {
@@ -116,10 +193,21 @@ function redactForPublicSummary(row: Record<string, unknown>): Record<string, un
   };
 }
 
-function filterRowsBeforeDeadline(rows: Record<string, unknown>[], req: Request): Record<string, unknown>[] {
+function filterRowsBeforePoolStart(
+  rows: Record<string, unknown>[],
+  startsAtByCompetitionId: Map<number, string | null>,
+  req: Request,
+): Record<string, unknown>[] {
   const jwt = req.supabaseUser;
   return rows.map((row) => {
     if (row.email === "__config__") return row;
+    const sid = row.competition_id;
+    const cid = sid !== undefined && sid !== null ? Number(sid) : NaN;
+    const startsRaw =
+      Number.isFinite(cid) && startsAtByCompetitionId.has(cid)
+        ? startsAtByCompetitionId.get(cid)
+        : null;
+    if (!shouldRedactSquadsBeforePoolStart(startsRaw)) return row;
     if (canMutateParticipantRow(row as DeelnemerRow, jwt)) return row;
     return redactForPublicSummary(row);
   });
@@ -131,16 +219,21 @@ export function createParticipantsHandlers(gateway: SupabaseGateway, env: Env): 
     listParticipants: asyncHandler(async (req: Request, res: Response) => {
       const data = await gateway.listParticipants();
       const rows = asRows(data);
-      const cfgRow = rows.find((r) => r.email === "__config__") ?? null;
-      const beforeDeadline = !isPastCompetitionDeadline(cfgRow);
-      // Privacy: hide other squads before deadline unless caller is admin or legacy-open mode.
-      // When PARTICIPANT_LEGACY_OPEN_MUTATIONS is true (default), full spelers are returned for Teams tab / dev.
-      if (
-        beforeDeadline &&
-        !isAdminBySecret(req, env) &&
-        !env.PARTICIPANT_LEGACY_OPEN_MUTATIONS
-      ) {
-        res.json(filterRowsBeforeDeadline(rows, req));
+      const compData = await gateway.listCompetitions();
+      const compRows = asRows(compData);
+      const startsAtByCompetitionId = new Map<number, string | null>();
+      for (const c of compRows) {
+        const id = Number(c.id);
+        if (!Number.isFinite(id)) continue;
+        const sa = c.starts_at;
+        startsAtByCompetitionId.set(
+          id,
+          sa !== undefined && sa !== null && String(sa).trim() !== "" ? String(sa) : null,
+        );
+      }
+      // Privacy: hide other squads until pool start (`starts_at`) unless admin or legacy-open mode.
+      if (!isAdminBySecret(req, env) && !env.PARTICIPANT_LEGACY_OPEN_MUTATIONS) {
+        res.json(filterRowsBeforePoolStart(rows, startsAtByCompetitionId, req));
         return;
       }
       res.json(rows);
@@ -176,9 +269,16 @@ export function createParticipantsHandlers(gateway: SupabaseGateway, env: Env): 
     }),
 
     findParticipantByEmail: asyncHandler(async (req: Request, res: Response) => {
-      const parsed = emailQuerySchema.safeParse({ email: req.query.email });
+      const parsed = emailQuerySchema.safeParse({
+        email: req.query.email,
+        competition_id: req.query.competition_id,
+      });
       if (!parsed.success) throw new HttpError(400, "email query parameter required");
-      const data = await gateway.findParticipantByEmail(parsed.data.email);
+      const { email, competition_id: competitionFilter } = parsed.data;
+      const data =
+        competitionFilter !== undefined
+          ? await gateway.findParticipantByEmailAndCompetition(email, competitionFilter)
+          : await gateway.findParticipantByEmail(email);
       const rows = asRows(data);
       const row = rows[0];
       if (!row) {
@@ -187,20 +287,145 @@ export function createParticipantsHandlers(gateway: SupabaseGateway, env: Env): 
       }
       const competitionId = row.competition_id;
       if (competitionId !== undefined && competitionId !== null) {
-        const cfgRow = await gateway.getCompetitionConfigRow(String(competitionId));
-        const beforeDeadline = !isPastCompetitionDeadline(cfgRow);
-        if (beforeDeadline && !isAdminBySecret(req, env)) {
+        const comp = await gateway.getCompetitionById(String(competitionId));
+        const startsAt = comp?.starts_at != null ? String(comp.starts_at) : null;
+        const beforeKickoff = shouldRedactSquadsBeforePoolStart(startsAt);
+        if (beforeKickoff && !isAdminBySecret(req, env)) {
           if (!canMutateParticipantRow(row as DeelnemerRow, req.supabaseUser)) {
-            throw new HttpError(403, "Not allowed to read another user's team before deadline");
+            throw new HttpError(403, "Not allowed to read another user's team before pool start");
           }
         }
       }
       res.json([row]);
     }),
 
+    listPublicCompetitions: asyncHandler(async (_req: Request, res: Response) => {
+      const raw = await gateway.listCompetitions();
+      const rows = asRows(raw);
+      const counts = await gateway.fetchParticipantCountsByCompetition();
+      const ownerIds = new Set<string>();
+      for (const r of rows) {
+        const o = r.owner_user_id;
+        if (o !== undefined && o !== null && String(o).trim()) ownerIds.add(String(o).trim());
+      }
+      const creatorByOwner = new Map<string, ReturnType<typeof slimPublicCreator>>();
+      await Promise.all(
+        [...ownerIds].map(async (uid) => {
+          const u = await gateway.adminGetUserById(uid);
+          creatorByOwner.set(uid, slimPublicCreator(u));
+        }),
+      );
+
+      const out = rows.map((r) => {
+        const id = Number(r.id);
+        const ownerRaw = r.owner_user_id;
+        const ownerId =
+          ownerRaw !== undefined && ownerRaw !== null && String(ownerRaw).trim()
+            ? String(ownerRaw).trim()
+            : "";
+        const meta = r.metadata;
+        const comp = r as Record<string, unknown>;
+        const startsRaw = r.starts_at;
+        let registrationDeadline: string | null = null;
+        if (startsRaw !== undefined && startsRaw !== null && String(startsRaw).trim() !== "") {
+          const d = new Date(String(startsRaw));
+          if (!Number.isNaN(d.getTime())) registrationDeadline = d.toISOString();
+        }
+        return {
+          id,
+          slug: r.slug,
+          name: r.name,
+          season_label: r.season_label ?? null,
+          starts_at: r.starts_at ?? null,
+          metadata:
+            meta && typeof meta === "object" && !Array.isArray(meta) ? meta : {},
+          created_at: r.created_at ?? null,
+          owner_user_id: ownerId || null,
+          creator: ownerId ? creatorByOwner.get(ownerId) ?? null : null,
+          registration_deadline: registrationDeadline,
+          registration_deadline_label: null,
+          registration_open: !isRegistrationClosedByPoolStart(comp),
+          team_count: Number.isFinite(id) ? counts.get(id) ?? 0 : 0,
+        };
+      });
+      res.json(out);
+    }),
+
+    listMyParticipants: asyncHandler(async (req: Request, res: Response) => {
+      const jwt = req.supabaseUser;
+      const email = jwt?.email !== undefined ? normEmail(jwt.email) : "";
+      if (!email) throw new HttpError(400, "JWT has no email claim");
+      const data = await gateway.findAllParticipantsByEmail(email);
+      const rows = asRows(data).filter(
+        (r) => r.email !== "__config__" && canMutateParticipantRow(r as DeelnemerRow, jwt),
+      );
+      res.json(
+        rows.map((r) => ({
+          id: r.id,
+          competition_id: r.competition_id,
+          naam: r.naam,
+          teamnaam: r.teamnaam,
+        })),
+      );
+    }),
+
     listPlayers: asyncHandler(async (_req: Request, res: Response) => {
       const data = await gateway.listWkSpelers();
       res.json(data);
+    }),
+
+    /**
+     * Records `competition_members` for the signed-in user so they may create a team
+     * (required for owner-created pools; idempotent for platform pools and after invites).
+     */
+    joinCompetition: asyncHandler(async (req: Request, res: Response) => {
+      const competitionId = resolveJoinCompetitionId(req);
+      const jwt = req.supabaseUser;
+      const uid = jwt?.sub;
+      if (!uid || typeof uid !== "string") throw new HttpError(401, "Authorization required");
+
+      const comp = await gateway.getCompetitionById(String(competitionId));
+      if (!comp) throw new HttpError(404, "Competition not found");
+      if (isRegistrationClosedByPoolStart(comp)) {
+        throw new HttpError(403, "This pool has already started. Registration is closed.");
+      }
+
+      const name = String(comp.name ?? "");
+      const slug = comp.slug !== undefined && comp.slug !== null ? String(comp.slug) : "";
+
+      if (await gateway.isCompetitionMember(competitionId, uid)) {
+        res.json({
+          ok: true,
+          alreadyMember: true,
+          competitionId,
+          competitionName: name,
+          slug,
+        });
+        return;
+      }
+
+      const inserted = await gateway.insertCompetitionMember(competitionId, uid, null);
+      if (!inserted) {
+        if (await gateway.isCompetitionMember(competitionId, uid)) {
+          res.json({
+            ok: true,
+            alreadyMember: true,
+            competitionId,
+            competitionName: name,
+            slug,
+          });
+          return;
+        }
+        throw new HttpError(409, "Could not record pool membership");
+      }
+
+      res.json({
+        ok: true,
+        alreadyMember: false,
+        competitionId,
+        competitionName: name,
+        slug,
+      });
     }),
 
     createParticipant: asyncHandler(async (req: Request, res: Response) => {
@@ -214,11 +439,45 @@ export function createParticipantsHandlers(gateway: SupabaseGateway, env: Env): 
           throw new HttpError(403, "Authenticated email must match registration email");
         }
         body.user_id = jwt.sub;
+        await assertMayRegisterInOwnedCompetition(gateway, body, jwt);
       }
-      const dup = asRows(await gateway.findParticipantByEmail(String(body.email ?? "")));
-      if (dup.length > 0) throw new HttpError(409, "This email is already registered");
-      const data = await gateway.createParticipant(body);
-      const competitionName = String(body.competition_name ?? "WK 2026 Poule");
+      const rawCid = body.competition_id;
+      let resolvedCompetitionId: number;
+      if (rawCid !== undefined && rawCid !== null && String(rawCid).trim() !== "") {
+        resolvedCompetitionId = Number(rawCid);
+        if (!Number.isFinite(resolvedCompetitionId) || resolvedCompetitionId <= 0) {
+          throw new HttpError(400, "Invalid competition_id");
+        }
+      } else {
+        const def = await gateway.getCompetitionBySlug("wc2026");
+        if (!def?.id) throw new HttpError(500, "Default competition (wc2026) not found");
+        resolvedCompetitionId = Number(def.id);
+        if (!Number.isFinite(resolvedCompetitionId)) {
+          throw new HttpError(500, "Default competition id invalid");
+        }
+      }
+      const dup = asRows(
+        await gateway.findParticipantByEmailAndCompetition(normEmail(body.email), resolvedCompetitionId),
+      );
+      if (dup.length > 0) {
+        throw new HttpError(409, "This email is already registered for this competition");
+      }
+      const compRow = await gateway.getCompetitionById(String(resolvedCompetitionId));
+      if (!adminOk && isRegistrationClosedByPoolStart(compRow)) {
+        throw new HttpError(403, "This pool has already started. Registration is closed.");
+      }
+      let competitionName =
+        typeof body.competition_name === "string" && body.competition_name.trim()
+          ? body.competition_name.trim()
+          : "";
+      if (!competitionName && compRow && typeof compRow === "object" && compRow !== null) {
+        const n = (compRow as Record<string, unknown>).name;
+        if (typeof n === "string" && n.trim()) competitionName = n.trim();
+      }
+      if (!competitionName) competitionName = "WK 2026 Poule";
+      const insertPayload = { ...body };
+      delete insertPayload.competition_name;
+      const data = await gateway.createParticipant(insertPayload);
       if (typeof body.email === "string" && body.email.trim()) {
         try {
           await mailer.sendSignupConfirmation(body.email.trim(), competitionName);

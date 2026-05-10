@@ -41,6 +41,29 @@ const envSchema = z.object({
     (v) => (v === "" || v === undefined ? undefined : v),
     z.string().email().optional(),
   ),
+  /** Brevo secret: either SMTP password (`xsmtpsib-…`) or REST transactional API key (`xkeysib-…`). Or keep SMTP here and set `BREVO_REST_API_KEY` for REST. */
+  BREVO_API_KEY: z.preprocess(
+    (v) => (v === "" || v === undefined ? undefined : v),
+    z.string().min(8).optional(),
+  ),
+  /** Prefer REST sends (`xkeysib-…`, SMTP & API → API keys). Use when `BREVO_API_KEY` is only an SMTP password or SMTP login fails. */
+  BREVO_REST_API_KEY: z.preprocess(
+    (v) => (v === "" || v === undefined ? undefined : v),
+    z.string().min(8).optional(),
+  ),
+  BREVO_FROM_EMAIL: z.preprocess(
+    (v) => (v === "" || v === undefined ? undefined : v),
+    z.string().email().optional(),
+  ),
+  BREVO_FROM_NAME: z.preprocess(
+    (v) => (v === "" || v === undefined ? undefined : v),
+    z.string().min(1).optional(),
+  ),
+  /** SMTP relay auth.user (Brevo: SMTP & API → SMTP). Often `*@brevo.com`; defaults to `BREVO_FROM_EMAIL` only if your login matches From. */
+  BREVO_SMTP_LOGIN: z.preprocess(
+    (v) => (v === "" || v === undefined ? undefined : v),
+    z.string().email().optional(),
+  ),
   CRON_SECRET: z.preprocess(
     (v) => (v === "" || v === undefined ? undefined : v),
     z.string().min(8).optional(),
@@ -54,6 +77,11 @@ const envSchema = z.object({
   ADMIN_UID: z.preprocess(
     (v) => (v === "" || v === undefined ? undefined : v),
     z.string().uuid().optional(),
+  ),
+  /** Public web app origin for invitation links, e.g. https://app.example.com (no trailing slash). */
+  PUBLIC_APP_URL: z.preprocess(
+    (v) => (v === "" || v === undefined ? undefined : v),
+    z.string().url().optional(),
   ),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])

@@ -6,7 +6,7 @@
  * - NEXT_PUBLIC_SUPABASE_URL — public Supabase URL (storage URLs)
  * - NEXT_PUBLIC_SUPABASE_ANON_KEY — Supabase publishable anon key (Auth in the browser)
  * - NEXT_PUBLIC_SITE_URL — origin used in redirect URLs for OAuth/email (e.g. http://localhost:3000)
- * - NEXT_PUBLIC_ADMIN_UID — admin auth.users.id required for frontend admin mode
+ * - NEXT_PUBLIC_SUPERADMIN_UID — Supabase auth.users.id of the only superadmin (Admin tab + full API access server-side via ADMIN_UID)
  */
 
 export const DEFAULT_DEADLINE = "2026-06-10T23:59:59+02:00";
@@ -45,15 +45,42 @@ export function getSupabaseAuthRedirectOrigin(): string {
   return "";
 }
 
+/**
+ * API root for `fetch`.
+ * - Same-origin: `/api` — proxied by `app/api/[...path]/route.ts` to Express in dev.
+ * - Direct: full URL ending in `/api`.
+ * If env is `http://localhost:4000` with no path, `/api` is appended (common mistake).
+ */
 export function getApiBaseUrl(): string {
-  return process.env.NEXT_PUBLIC_API_BASE || "http://localhost:4000/api";
+  const raw = process.env.NEXT_PUBLIC_API_BASE?.trim();
+  if (raw?.startsWith("/")) return raw.replace(/\/$/, "") || "/api";
+  if (raw?.startsWith("http")) {
+    const u = raw.replace(/\/$/, "");
+    try {
+      const parsed = new URL(u);
+      const pathname = (parsed.pathname || "/").replace(/\/$/, "") || "/";
+      const local = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+      if (local && pathname === "/") return `${u}/api`;
+      return u;
+    } catch {
+      return u;
+    }
+  }
+  return "http://localhost:4000/api";
 }
 
-export function getAdminUid(): string {
+/** Superadmin auth user id (must match backend `ADMIN_UID`). No default — set in env. */
+export function getSuperadminUid(): string {
   return (
+    process.env.NEXT_PUBLIC_SUPERADMIN_UID?.trim() ||
     process.env.NEXT_PUBLIC_ADMIN_UID?.trim() ||
-    "9d038a42-843f-4aa2-8462-5284431b628d"
+    ""
   );
+}
+
+/** @deprecated use getSuperadminUid */
+export function getAdminUid(): string {
+  return getSuperadminUid();
 }
 
 export function buildPhotos(supabaseUrl: string) {
