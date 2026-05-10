@@ -4,7 +4,7 @@ import type { SupabaseGateway } from "../services/supabase-gateway.js";
 import { HttpError } from "../shared/http-error.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { canMutateParticipantRow, type DeelnemerRow } from "../participant/participant-access.js";
-import { isPastCompetitionDeadline } from "../participant/competition-deadline.js";
+import { isRegistrationClosedByPoolStart } from "../participant/competition-deadline.js";
 
 function isAdminJwt(req: Request, env: Env): boolean {
   const role = String(req.supabaseUser?.role ?? "");
@@ -40,9 +40,9 @@ export function participantMutationGate(gateway: SupabaseGateway, env: Env) {
 
     const competitionId = (row as Record<string, unknown>).competition_id;
     if (!adminOk && (req.method === "PATCH" || req.method === "DELETE") && competitionId !== undefined && competitionId !== null) {
-      const cfgRow = await gateway.getCompetitionConfigRow(String(competitionId));
-      if (isPastCompetitionDeadline(cfgRow)) {
-        throw new HttpError(403, "Registration deadline has passed. Team mutations are read-only.");
+      const comp = await gateway.getCompetitionById(String(competitionId));
+      if (isRegistrationClosedByPoolStart(comp)) {
+        throw new HttpError(403, "The pool has already started. Team changes are no longer allowed.");
       }
     }
 
