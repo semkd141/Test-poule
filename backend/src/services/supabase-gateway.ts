@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Env } from "../config/env.js";
 import type { AppLogger } from "../lib/logger.js";
@@ -264,6 +265,43 @@ export class SupabaseGateway {
     return this.parseSuccessBody(r);
   }
 
+  /**
+   * Auth user record for public competition “creator” display (service role only).
+   * Returns null if service role is not configured or the user does not exist.
+   */
+  async adminGetUserById(userId: string): Promise<Record<string, unknown> | null> {
+    const admin = this.supabaseAdmin();
+    if (!admin) return null;
+    const trimmed = userId.trim();
+    if (!trimmed) return null;
+    const { data, error } = await admin.auth.admin.getUserById(trimmed);
+    if (error) {
+      this.log.debug({ userId: trimmed, message: error.message }, "adminGetUserById failed");
+      return null;
+    }
+    if (!data?.user) return null;
+    return data.user as unknown as Record<string, unknown>;
+  }
+
+  /** Count non-config participants per competition (single query). */
+  async fetchParticipantCountsByCompetition(): Promise<Map<number, number>> {
+    const r = await this.request(
+      "db.deelnemers.competitionCounts",
+      `${this.dbBase}/deelnemers?email=not.eq.__config__&select=competition_id`,
+      { headers: this.serviceHeaders() },
+    );
+    const data = await this.parseSuccessBody(r);
+    const map = new Map<number, number>();
+    if (!Array.isArray(data)) return map;
+    for (const row of data) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+      const cid = Number((row as Record<string, unknown>).competition_id);
+      if (!Number.isFinite(cid)) continue;
+      map.set(cid, (map.get(cid) ?? 0) + 1);
+    }
+    return map;
+  }
+
   // --- REST (deelnemers / wk_spelers) ---
 
   async listParticipants(): Promise<unknown> {
@@ -293,6 +331,31 @@ export class SupabaseGateway {
     const r = await this.request(
       "db.deelnemers.byEmail",
       `${this.dbBase}/deelnemers?email=ilike.${enc}&email=not.eq.__config__&limit=1`,
+      { headers: this.serviceHeaders() },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  /** All participant rows for an email (multiple competitions). */
+  async findAllParticipantsByEmail(email: string): Promise<unknown> {
+    const enc = encodeURIComponent(email.trim());
+    const r = await this.request(
+      "db.deelnemers.byEmailAll",
+      `${this.dbBase}/deelnemers?email=ilike.${enc}&email=not.eq.__config__&select=*&order=id`,
+      { headers: this.serviceHeaders() },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  async findParticipantByEmailAndCompetition(
+    email: string,
+    competitionId: number,
+  ): Promise<unknown> {
+    const enc = encodeURIComponent(email.trim());
+    const cid = encodeURIComponent(String(competitionId));
+    const r = await this.request(
+      "db.deelnemers.byEmailCompetition",
+      `${this.dbBase}/deelnemers?email=ilike.${enc}&email=not.eq.__config__&competition_id=eq.${cid}&limit=1`,
       { headers: this.serviceHeaders() },
     );
     return this.parseSuccessBody(r);
@@ -335,6 +398,17 @@ export class SupabaseGateway {
       { headers: this.serviceHeaders() },
     );
     return this.parseSuccessBody(r);
+  }
+
+  async getFixtureMappingById(id: string): Promise<Record<string, unknown> | null> {
+    const r = await this.request(
+      "db.fixture_mapping.byId",
+      `${this.dbBase}/fixture_mappings?id=eq.${encodeURIComponent(id)}&select=*&limit=1`,
+      { headers: this.serviceHeaders() },
+    );
+    const data = await this.parseSuccessBody(r);
+    if (!Array.isArray(data) || data.length === 0) return null;
+    return data[0] as Record<string, unknown>;
   }
 
   async patchFixtureMapping(
@@ -418,6 +492,26 @@ export class SupabaseGateway {
     return data[0] as Record<string, unknown>;
   }
 
+  async getCompetitionById(id: string): Promise<Record<string, unknown> | null> {
+    const r = await this.request(
+      "db.competitions.byId",
+      `${this.dbBase}/competitions?id=eq.${encodeURIComponent(id)}&select=*&limit=1`,
+      { headers: this.serviceHeaders() },
+    );
+    const data = await this.parseSuccessBody(r);
+    if (!Array.isArray(data) || data.length === 0) return null;
+    return data[0] as Record<string, unknown>;
+  }
+
+  async listCompetitionsByOwner(ownerUserId: string): Promise<unknown> {
+    const r = await this.request(
+      "db.competitions.byOwner",
+      `${this.dbBase}/competitions?owner_user_id=eq.${encodeURIComponent(ownerUserId)}&select=*&order=id`,
+      { headers: this.serviceHeaders() },
+    );
+    return this.parseSuccessBody(r);
+  }
+
   async listCompetitions(): Promise<unknown> {
     const r = await this.request(
       "db.competitions.list",
@@ -465,13 +559,18 @@ export class SupabaseGateway {
   }
 
   async createParticipant(body: unknown): Promise<unknown> {
+    const row =
+      typeof body === "object" && body !== null && !Array.isArray(body)
+        ? { ...(body as Record<string, unknown>) }
+        : {};
+    delete row.competition_name;
     const r = await this.request(
       "db.deelnemers.insert",
       `${this.dbBase}/deelnemers`,
       {
         method: "POST",
         headers: { ...this.serviceHeaders(), Prefer: "return=representation" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(row),
       },
     );
     return this.parseSuccessBody(r);
@@ -532,5 +631,118 @@ export class SupabaseGateway {
         headers: { ...this.serviceHeaders(), Prefer: "return=minimal" },
       },
     );
+  }
+
+  // --- Competition invites / members ---
+
+  hashInviteToken(plainToken: string): string {
+    return createHash("sha256").update(plainToken.trim(), "utf8").digest("hex");
+  }
+
+  createInviteSecret(): { plainToken: string; tokenHash: string } {
+    const plainToken = randomBytes(24).toString("base64url");
+    const tokenHash = createHash("sha256").update(plainToken, "utf8").digest("hex");
+    return { plainToken, tokenHash };
+  }
+
+  async deletePendingInvitesForEmail(competitionId: number, email: string): Promise<void> {
+    const em = encodeURIComponent(email.trim().toLowerCase());
+    await this.request(
+      "db.competition_invites.deletePending",
+      `${this.dbBase}/competition_invites?competition_id=eq.${competitionId}&email=eq.${em}&accepted_at=is.null`,
+      {
+        method: "DELETE",
+        headers: { ...this.serviceHeaders(), Prefer: "return=minimal" },
+      },
+    );
+  }
+
+  async insertCompetitionInvite(row: {
+    competition_id: number;
+    email: string;
+    token_hash: string;
+    invited_by: string;
+    expires_at: string;
+  }): Promise<unknown> {
+    const r = await this.request(
+      "db.competition_invites.insert",
+      `${this.dbBase}/competition_invites`,
+      {
+        method: "POST",
+        headers: { ...this.serviceHeaders(), Prefer: "return=representation" },
+        body: JSON.stringify(row),
+      },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  async getInviteByTokenHash(tokenHash: string): Promise<Record<string, unknown> | null> {
+    const r = await this.request(
+      "db.competition_invites.byHash",
+      `${this.dbBase}/competition_invites?token_hash=eq.${encodeURIComponent(tokenHash)}&select=*&limit=1`,
+      { headers: this.serviceHeaders() },
+    );
+    const data = await this.parseSuccessBody(r);
+    if (!Array.isArray(data) || data.length === 0) return null;
+    return data[0] as Record<string, unknown>;
+  }
+
+  async listCompetitionInvites(competitionId: number): Promise<unknown> {
+    const r = await this.request(
+      "db.competition_invites.list",
+      `${this.dbBase}/competition_invites?competition_id=eq.${competitionId}&select=id,email,created_at,expires_at,accepted_at,accepted_user_id,invited_by&order=created_at.desc`,
+      { headers: this.serviceHeaders() },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  async patchCompetitionInvite(
+    id: string,
+    body: Record<string, unknown>,
+  ): Promise<unknown> {
+    const r = await this.request(
+      "db.competition_invites.patch",
+      `${this.dbBase}/competition_invites?id=eq.${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        headers: { ...this.serviceHeaders(), Prefer: "return=representation" },
+        body: JSON.stringify(body),
+      },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  async isCompetitionMember(competitionId: number, userId: string): Promise<boolean> {
+    const r = await this.request(
+      "db.competition_members.check",
+      `${this.dbBase}/competition_members?competition_id=eq.${competitionId}&user_id=eq.${encodeURIComponent(userId)}&select=competition_id&limit=1`,
+      { headers: this.serviceHeaders() },
+    );
+    const data = await this.parseSuccessBody(r);
+    return Array.isArray(data) && data.length > 0;
+  }
+
+  async insertCompetitionMember(
+    competitionId: number,
+    userId: string,
+    inviteId: number | null,
+  ): Promise<boolean> {
+    const r = await fetch(`${this.dbBase}/competition_members`, {
+      method: "POST",
+      headers: {
+        ...this.serviceHeaders(),
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify({
+        competition_id: competitionId,
+        user_id: userId,
+        invite_id: inviteId,
+      }),
+    });
+    if (r.status === 201 || r.status === 200) return true;
+    if (r.status === 409) return false;
+    const payload = await this.parseJsonSafe(r);
+    this.log.warn({ competitionId, userId, status: r.status, payload }, "competition_members insert failed");
+    throw new UpstreamHttpError(r.status, payload);
   }
 }

@@ -14,7 +14,11 @@ import {
   persistSupabaseSessionToWkStorage,
   getMyDeelnemer,
   dbBijwerkenVeld,
+  listPublicCompetitions,
+  readSelectedCompetition,
+  writeSelectedCompetition,
 } from "../../../lib/wk/api-client";
+import { toastError } from "../../../lib/wk/toast";
 import { getSupabaseAuthRedirectOrigin } from "@/lib/wk/config";
 import { getSupabaseBrowser } from "../../../lib/wk/supabase-browser";
 import { flag } from "../../../lib/wk/tournament";
@@ -38,7 +42,7 @@ export function EditMyTeamTab() {
   const { t, participants, config, reloadParticipants, wkSpelers } = useApp();
 
   // Auth state
-  const [authState, setAuthState] = useState("loading"); // loading | unauthenticated | sending | sent | signup_check_email | authenticated | no_team
+  const [authState, setAuthState] = useState("loading"); // loading | unauthenticated | sending | sent | signup_check_email | pick_competition | authenticated | no_team
   const [session, setSession] = useState(null);
   const [myTeam, setMyTeam] = useState(null);
   const [emailInput, setEmailInput] = useState("");
@@ -56,7 +60,11 @@ export function EditMyTeamTab() {
   const [editTeamnaam, setEditTeamnaam] = useState("");
   const [editSpelers, setEditSpelers] = useState([]);
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);``
+  const [saved, setSaved] = useState(false);
+
+  const [publicComps, setPublicComps] = useState([]);
+  const [competitionsLoading, setCompetitionsLoading] = useState(false);
+  const [competitionSelectId, setCompetitionSelectId] = useState("");
 
   const deadlinePassed = Date.now() > config.deadline.getTime();
 
@@ -159,8 +167,80 @@ export function EditMyTeamTab() {
     setSession(sess);
     const email = sess.user && sess.user.email;
     if (!email) { setAuthState("unauthenticated"); return; }
-    const team = await getMyDeelnemer(email);
+    const stored = typeof window !== "undefined" ? readSelectedCompetition() : null;
+    if (!stored || !stored.id) {
+      setMyTeam(null);
+      setAuthState("pick_competition");
+      return;
+    }
+    const team = await getMyDeelnemer(email, stored.id);
     if (!team) {
+      setMyTeam(null);
+      setAuthState("no_team");
+    } else {
+      setMyTeam(team);
+      setEditNaam(team.naam || "");
+      setEditTeamnaam(team.teamnaam || "");
+      setEditSpelers(Array.isArray(team.spelers) ? team.spelers.slice() : []);
+      setAuthState("authenticated");
+    }
+  }
+
+  async function ensurePublicCompetitionsLoaded() {
+    if (publicComps.length > 0 || competitionsLoading) return;
+    setCompetitionsLoading(true);
+    try {
+      const rows = await listPublicCompetitions();
+      setPublicComps(Array.isArray(rows) ? rows : []);
+    } finally {
+      setCompetitionsLoading(false);
+    }
+  }
+
+  useEffect(function() {
+    if (authState !== "pick_competition" && authState !== "authenticated") return undefined;
+    var cancelled = false;
+    ensurePublicCompetitionsLoaded().then(function() {
+      if (cancelled) return;
+      if (authState === "pick_competition") {
+        var s = readSelectedCompetition();
+        if (s && s.id) setCompetitionSelectId(String(s.id));
+      }
+    });
+    return function() { cancelled = true; };
+  }, [authState]);
+
+  async function confirmPickCompetition() {
+    var id = parseInt(competitionSelectId, 10);
+    if (!Number.isFinite(id) || id <= 0) return;
+    var row = publicComps.find(function(c) { return Number(c.id) === id; });
+    var name = row && row.name ? String(row.name) : "Competition";
+    writeSelectedCompetition({ id: id, name: name, slug: row && row.slug ? String(row.slug) : undefined });
+    if (!session || !session.user || !session.user.email) return;
+    var team = await getMyDeelnemer(session.user.email, id);
+    if (!team) {
+      setMyTeam(null);
+      setAuthState("no_team");
+    } else {
+      setMyTeam(team);
+      setEditNaam(team.naam || "");
+      setEditTeamnaam(team.teamnaam || "");
+      setEditSpelers(Array.isArray(team.spelers) ? team.spelers.slice() : []);
+      setAuthState("authenticated");
+    }
+  }
+
+  async function switchCompetition(compId) {
+    var id = Number(compId);
+    if (!Number.isFinite(id) || id <= 0) return;
+    await ensurePublicCompetitionsLoaded();
+    var row = publicComps.find(function(c) { return Number(c.id) === id; });
+    var name = row && row.name ? String(row.name) : "Competition";
+    writeSelectedCompetition({ id: id, name: name, slug: row && row.slug ? String(row.slug) : undefined });
+    if (!session || !session.user || !session.user.email) return;
+    var team = await getMyDeelnemer(session.user.email, id);
+    if (!team) {
+      setMyTeam(null);
       setAuthState("no_team");
     } else {
       setMyTeam(team);
@@ -302,7 +382,7 @@ export function EditMyTeamTab() {
       setSaved(true);
       setTimeout(function(){ setSaved(false); }, 2500);
     } catch(e) {
-      alert("Error saving: " + e.message);
+      toastError("Error saving: " + (e && e.message ? e.message : String(e)));
     } finally {
       setSaving(false);
     }
@@ -491,6 +571,56 @@ export function EditMyTeamTab() {
     );
   }
 
+  if (authState === "pick_competition") {
+    return (
+      <div>
+        <div className="card-title">My Team</div>
+        <div className="card" style={{maxWidth:480}}>
+          <div style={{fontFamily:"var(--wk-heading-font)",fontSize:16,letterSpacing:"0.05em",color:"var(--orange)",marginBottom:10}}>
+            Choose a competition
+          </div>
+          <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:14,lineHeight:1.6}}>
+            Select which pool you want to view or edit. This choice is remembered for this browser session.
+          </p>
+          {competitionsLoading ? (
+            <div style={{fontSize:13,color:"var(--fg-muted)"}}>Loading competitions…</div>
+          ) : (
+            <React.Fragment>
+              <label style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",display:"block",marginBottom:6}}>Competition</label>
+              <select
+                value={competitionSelectId}
+                onChange={function(e){ setCompetitionSelectId(e.target.value); }}
+                style={{width:"100%",maxWidth:360,marginBottom:14}}
+              >
+                <option value="">Select…</option>
+                {publicComps.map(function(c) {
+                  var id = c.id;
+                  var label = (c.name || c.slug || "Pool") + (c.season_label ? " · " + c.season_label : "");
+                  return (
+                    <option key={String(id)} value={String(id)}>{label}</option>
+                  );
+                })}
+              </select>
+              <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={!competitionSelectId}
+                  onClick={confirmPickCompetition}
+                >
+                  Continue →
+                </button>
+                <button type="button" className="btn btn-outline" onClick={signOut}>
+                  Log out
+                </button>
+              </div>
+            </React.Fragment>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   if (authState === "signup_check_email") {
     return (
       <div>
@@ -527,18 +657,30 @@ export function EditMyTeamTab() {
   }
 
   if (authState === "no_team") {
+    var st = typeof window !== "undefined" ? readSelectedCompetition() : null;
+    var poolLabel = st && st.name ? st.name : "this competition";
     return (
       <div>
         <div className="card-title">My Team</div>
         <div className="card" style={{maxWidth:480}}>
           <p style={{fontSize:14,marginBottom:16}}>
-            No team found for <strong>{session && session.user && session.user.email}</strong>.
+            No team registered for <strong>{poolLabel}</strong> with{" "}
+            <strong>{session && session.user && session.user.email}</strong>.
           </p>
           <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:16}}>
-            Did you register with a different email? Or haven't registered yet?
+            Register on the Register tab for this pool, or choose another competition.
           </p>
           <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-            <button className="btn btn-outline" onClick={signOut}>Try different email</button>
+            <button
+              className="btn btn-outline"
+              onClick={function(){
+                setCompetitionSelectId("");
+                setAuthState("pick_competition");
+              }}
+            >
+              Choose competition
+            </button>
+            <button className="btn btn-outline" onClick={signOut}>Log out</button>
           </div>
         </div>
       </div>
@@ -550,7 +692,22 @@ export function EditMyTeamTab() {
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:10}}>
         <div className="card-title" style={{margin:0}}>My Team</div>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          {publicComps.length > 0 ? (
+            <label style={{fontSize:12,color:"var(--fg-muted)",display:"flex",alignItems:"center",gap:8}}>
+              <span>Competition</span>
+              <select
+                value={String((myTeam && myTeam.competition_id) || (readSelectedCompetition() && readSelectedCompetition().id) || "")}
+                onChange={function(e){ switchCompetition(e.target.value); }}
+                style={{fontSize:12,maxWidth:220}}
+              >
+                {publicComps.map(function(c) {
+                  var label = (c.name || c.slug || "Pool") + (c.season_label ? " · " + c.season_label : "");
+                  return <option key={String(c.id)} value={String(c.id)}>{label}</option>;
+                })}
+              </select>
+            </label>
+          ) : null}
           <span style={{fontSize:12,color:"var(--fg-muted)"}}>
             Logged in as <strong>{session && session.user && session.user.email}</strong>
           </span>

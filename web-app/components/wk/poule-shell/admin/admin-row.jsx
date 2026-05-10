@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { FORMATIONS } from "../../../../lib/wk/tournament";
 import { dbBijwerkenSpelers, dbBijwerkenVeld, dbVerwijderParticipant } from "../../../../lib/wk/api-client";
+import { toastError } from "../../../../lib/wk/toast";
 import { useApp } from "../../poule-context.jsx";
 import { CaptainBand } from "../teams/captain-band.jsx";
 
@@ -71,7 +72,7 @@ export function AdminRow(props) {
       setTimeout(function(){ setPointsSaved(false); }, 1800);
       if (props.onReload) await props.onReload();
     } catch (e) {
-      alert("Error saving points: " + (e && e.message ? e.message : String(e)));
+      toastError("Error saving points: " + (e && e.message ? e.message : String(e)));
     } finally {
       setSavingPoints(false);
     }
@@ -88,7 +89,7 @@ export function AdminRow(props) {
 
   async function saveEdit() {
     if (!editTeamnaam.trim() || !editNaam.trim()) {
-      alert(t.fillRequired || "Fill in team name and name");
+      toastError(t.fillRequired || "Fill in team name and name");
       return;
     }
     setSavingEdit(true);
@@ -103,7 +104,7 @@ export function AdminRow(props) {
       setTimeout(function(){ setEditSaved(false); setEditing(false); }, 1200);
       if (props.onReload) await props.onReload();
     } catch (e) {
-      alert("Error: " + e.message);
+      toastError("Error: " + e.message);
     } finally {
       setSavingEdit(false);
     }
@@ -255,7 +256,7 @@ export function AdminRow(props) {
                     await dbVerwijderParticipant(props.participant.id);
                     if (props.onReload) await props.onReload();
                   } catch (e) {
-                    alert("Fout bij verwijderen: " + (e && e.message ? e.message : String(e)));
+                    toastError("Fout bij verwijderen: " + (e && e.message ? e.message : String(e)));
                   }
                 }}
                 title="Team verwijderen"

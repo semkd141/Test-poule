@@ -1,5 +1,4 @@
 import { Router } from "express";
-import type { Request } from "express";
 import type { Env } from "../config/env.js";
 import type { SupabaseGateway } from "../services/supabase-gateway.js";
 import { HttpError } from "../shared/http-error.js";
@@ -7,25 +6,13 @@ import { asyncHandler } from "../middleware/async-handler.js";
 import { ApiFootballClient, type ApiFootballFixture } from "../services/api-football-client.js";
 import { ScoringEngine } from "../services/scoring-engine.js";
 import { z } from "zod";
+import { isPlatformOperator } from "../auth/platform-operator.js";
 
 type FixtureMapRow = {
   id: number;
   local_key: string;
   api_fixture_id: number | null;
 };
-
-function isInternalAuthorized(req: Request, env: Env): boolean {
-  if (env.CRON_SECRET && req.get("x-cron-secret") === env.CRON_SECRET) return true;
-  if (env.ADMIN_UID && String(req.supabaseUser?.sub ?? "") === env.ADMIN_UID) return true;
-  const role = String(req.supabaseUser?.role ?? "");
-  const appRole = String(
-    (req.supabaseUser as Record<string, unknown> | undefined)?.app_metadata &&
-      typeof (req.supabaseUser as Record<string, unknown>).app_metadata === "object"
-      ? ((req.supabaseUser as Record<string, unknown>).app_metadata as Record<string, unknown>).role ?? ""
-      : "",
-  );
-  return role === "service_role" || role === "admin" || appRole === "admin";
-}
 
 function toMatchPayload(competitionId: number, src: ApiFootballFixture): Record<string, unknown> {
   return {
@@ -74,7 +61,7 @@ export function createInternalRouter(gateway: SupabaseGateway, env: Env): Router
   router.get(
     "/competitions",
     asyncHandler(async (req, res) => {
-      if (!isInternalAuthorized(req, env)) throw new HttpError(401, "Invalid internal authorization");
+      if (!isPlatformOperator(req, env)) throw new HttpError(401, "Invalid internal authorization");
       const out = await gateway.listCompetitions();
       res.json(out);
     }),
@@ -83,7 +70,7 @@ export function createInternalRouter(gateway: SupabaseGateway, env: Env): Router
   router.post(
     "/competitions",
     asyncHandler(async (req, res) => {
-      if (!isInternalAuthorized(req, env)) throw new HttpError(401, "Invalid internal authorization");
+      if (!isPlatformOperator(req, env)) throw new HttpError(401, "Invalid internal authorization");
       const parsed = competitionCreateSchema.safeParse(req.body);
       if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
       const out = await gateway.createCompetition(parsed.data);
@@ -94,7 +81,7 @@ export function createInternalRouter(gateway: SupabaseGateway, env: Env): Router
   router.patch(
     "/competitions/:id",
     asyncHandler(async (req, res) => {
-      if (!isInternalAuthorized(req, env)) throw new HttpError(401, "Invalid internal authorization");
+      if (!isPlatformOperator(req, env)) throw new HttpError(401, "Invalid internal authorization");
       const id = String(req.params.id ?? "").trim();
       if (!id) throw new HttpError(400, "id required");
       const parsed = competitionPatchSchema.safeParse(req.body);
@@ -109,7 +96,7 @@ export function createInternalRouter(gateway: SupabaseGateway, env: Env): Router
   router.delete(
     "/competitions/:id",
     asyncHandler(async (req, res) => {
-      if (!isInternalAuthorized(req, env)) throw new HttpError(401, "Invalid internal authorization");
+      if (!isPlatformOperator(req, env)) throw new HttpError(401, "Invalid internal authorization");
       const id = String(req.params.id ?? "").trim();
       if (!id) throw new HttpError(400, "id required");
       await gateway.deleteCompetition(id);
@@ -120,7 +107,7 @@ export function createInternalRouter(gateway: SupabaseGateway, env: Env): Router
   router.get(
     "/fixture-mappings",
     asyncHandler(async (req, res) => {
-      if (!isInternalAuthorized(req, env)) throw new HttpError(401, "Invalid internal authorization");
+      if (!isPlatformOperator(req, env)) throw new HttpError(401, "Invalid internal authorization");
       const q = mappingQuerySchema.safeParse(req.query);
       if (!q.success) throw new HttpError(400, "competitionId query required");
       const out = await gateway.listFixtureMappings(q.data.competitionId);
@@ -131,7 +118,7 @@ export function createInternalRouter(gateway: SupabaseGateway, env: Env): Router
   router.patch(
     "/fixture-mappings/:id",
     asyncHandler(async (req, res) => {
-      if (!isInternalAuthorized(req, env)) throw new HttpError(401, "Invalid internal authorization");
+      if (!isPlatformOperator(req, env)) throw new HttpError(401, "Invalid internal authorization");
       const id = String(req.params.id ?? "").trim();
       if (!id) throw new HttpError(400, "id required");
       const parsed = mappingPatchSchema.safeParse(req.body);
@@ -144,7 +131,7 @@ export function createInternalRouter(gateway: SupabaseGateway, env: Env): Router
   router.post(
     "/sync-fixtures",
     asyncHandler(async (req, res) => {
-      if (!isInternalAuthorized(req, env)) throw new HttpError(401, "Invalid internal authorization");
+      if (!isPlatformOperator(req, env)) throw new HttpError(401, "Invalid internal authorization");
       if (!env.API_FOOTBALL_KEY) throw new HttpError(500, "API_FOOTBALL_KEY is not configured");
 
       const competitionSlug = String(req.body?.competitionSlug ?? "wc2026");
