@@ -31,6 +31,92 @@ async function readErrorBody(r: Response): Promise<string> {
 
 export const AUTH_STORAGE_KEY = "wk26_auth_session";
 
+/** Fired when WK-local auth storage changes so UI (e.g. settings → superadmin) can recompute without full reload. */
+export const WK_AUTH_SESSION_EVENT = "wk-auth-session-changed";
+
+/** `{ id, name, slug? }` — shared between Register and My Team */
+export const WK_SELECTED_COMPETITION_KEY = "wk_selected_competition";
+
+export type WkSelectedCompetition = {
+  id: number;
+  name: string;
+  slug?: string;
+  /** ISO deadline from `/competitions` when known — used to gate Register per pool. */
+  registration_deadline?: string;
+  registration_open?: boolean;
+};
+
+export function readSelectedCompetition(): WkSelectedCompetition | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(WK_SELECTED_COMPETITION_KEY);
+    if (!raw) return null;
+    const o = JSON.parse(raw) as {
+      id?: unknown;
+      name?: unknown;
+      slug?: unknown;
+      registration_deadline?: unknown;
+      registration_open?: unknown;
+    };
+    const id = Number(o.id);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    const name = typeof o.name === "string" ? o.name : "";
+    const slug = typeof o.slug === "string" ? o.slug : undefined;
+    const registration_deadline =
+      typeof o.registration_deadline === "string" ? o.registration_deadline : undefined;
+    const registration_open =
+      typeof o.registration_open === "boolean" ? o.registration_open : undefined;
+    return { id, name, slug, registration_deadline, registration_open };
+  } catch {
+    return null;
+  }
+}
+
+export function writeSelectedCompetition(c: WkSelectedCompetition): void {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(WK_SELECTED_COMPETITION_KEY, JSON.stringify(c));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function clearSelectedCompetition(): void {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.removeItem(WK_SELECTED_COMPETITION_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+const WK_SKIP_COMPETITION_PICKER_KEY = "wk_skip_competition_picker";
+
+/** Pre-select a competition and open Register on step 2 (details) instead of the competition dropdown. */
+export function queueRegisterForCompetition(c: WkSelectedCompetition): void {
+  writeSelectedCompetition(c);
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(WK_SKIP_COMPETITION_PICKER_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Returns true once if the user came from “All competitions” → Register. */
+export function consumeRegisterSkipCompetitionStep(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    if (sessionStorage.getItem(WK_SKIP_COMPETITION_PICKER_KEY) === "1") {
+      sessionStorage.removeItem(WK_SKIP_COMPETITION_PICKER_KEY);
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
 export async function authSendMagicLink(email: string): Promise<boolean> {
   const r = await fetch(`${apiBase()}/auth/otp`, {
     method: "POST",
@@ -178,6 +264,9 @@ export function authSaveSession(data: { access_token?: string; refresh_token?: s
     user: data.user || {},
   };
   localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(toSave));
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(WK_AUTH_SESSION_EVENT));
+  }
 }
 
 export function authLoadSession(): {
@@ -199,6 +288,9 @@ export function authLoadSession(): {
 
 export function authClearSession() {
   localStorage.removeItem(AUTH_STORAGE_KEY);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(WK_AUTH_SESSION_EVENT));
+  }
 }
 
 export async function authRefreshSession(refreshToken: string) {
@@ -293,23 +385,42 @@ export function persistSupabaseSessionToWkStorage(session: {
 /** Express API: send Supabase access_token if the user is logged in (Supabase client session or WK storage). Refreshes when stale so POST /participants does not get 401 from invalid/expired JWTs. */
 async function participantAuthHeaders(): Promise<Record<string, string>> {
   if (typeof window === "undefined") return {};
+
+  let token: string | undefined;
+
+  const wk = await authGetValidSession();
+  if (wk?.access_token) token = wk.access_token;
+
   try {
     const sb = getSupabaseBrowser();
     if (sb) {
       const { data } = await sb.auth.getSession();
-      let t = data.session?.access_token;
-      const exp = data.session?.expires_at;
+      let sess = data.session;
+      let t = sess?.access_token;
+      const exp = sess?.expires_at;
       if (t && typeof exp === "number" && Math.floor(Date.now() / 1000) >= exp - 60) {
         const { data: ref } = await sb.auth.refreshSession();
-        if (ref.session?.access_token) t = ref.session.access_token;
+        if (ref.session?.access_token) {
+          t = ref.session.access_token;
+          sess = ref.session;
+        }
       }
-      if (t) return { Authorization: `Bearer ${t}` };
+      if (t && sess) {
+        persistSupabaseSessionToWkStorage({
+          access_token: sess.access_token,
+          refresh_token: sess.refresh_token,
+          expires_at: sess.expires_at,
+          expires_in: sess.expires_in,
+          user: sess.user,
+        });
+        token = t;
+      }
     }
   } catch {
     /* ignore */
   }
-  const s = await authGetValidSession();
-  return s?.access_token ? { Authorization: `Bearer ${s.access_token}` } : {};
+
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 function parseSpelersField(d: { spelers?: unknown }) {
@@ -324,9 +435,95 @@ function parseSpelersField(d: { spelers?: unknown }) {
   return Array.isArray(raw) ? raw : [];
 }
 
-export async function getMyDeelnemer(email: string) {
+export type PublicCompetition = {
+  id: number;
+  slug?: string;
+  name?: string;
+  season_label?: string | null;
+  starts_at?: string | null;
+  metadata?: Record<string, unknown>;
+  created_at?: string | null;
+  owner_user_id?: string | null;
+  creator?: {
+    id: string;
+    email: string | null;
+    full_name: string | null;
+  } | null;
+  registration_deadline?: string;
+  registration_deadline_label?: string | null;
+  registration_open?: boolean;
+  team_count?: number;
+};
+
+export async function listPublicCompetitions(): Promise<PublicCompetition[]> {
+  try {
+    const r = await fetch(`${apiBase()}/competitions`, { headers: jsonHeaders });
+    if (!r.ok) return [];
+    const data = (await r.json()) as PublicCompetition[];
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Registers the signed-in user in the pool (`competition_members`) so they can submit a team. Idempotent. */
+export async function joinCompetition(competitionId: number): Promise<{
+  ok: boolean;
+  alreadyMember?: boolean;
+  competitionId: number;
+  competitionName?: string;
+  slug?: string;
+}> {
   const bearer = await participantAuthHeaders();
-  const r = await fetch(`${apiBase()}/participants/by-email?email=${encodeURIComponent(email)}`, {
+  if (!bearer.Authorization) {
+    throw new Error("Sign in required");
+  }
+  const r = await fetch(`${apiBase()}/participants/join`, {
+    method: "POST",
+    headers: { ...jsonHeaders, ...bearer },
+    body: JSON.stringify({ competition_id: competitionId }),
+  });
+  if (!r.ok) {
+    const msg = await readErrorBody(r);
+    throw new Error(`(${r.status}) ${msg}`);
+  }
+  return (await r.json()) as {
+    ok: boolean;
+    alreadyMember?: boolean;
+    competitionId: number;
+    competitionName?: string;
+    slug?: string;
+  };
+}
+
+export type MyParticipantSummary = {
+  id: number;
+  competition_id?: unknown;
+  naam?: unknown;
+  teamnaam?: unknown;
+};
+
+export async function listMyParticipantSummaries(): Promise<MyParticipantSummary[]> {
+  try {
+    const bearer = await participantAuthHeaders();
+    const r = await fetch(`${apiBase()}/participants/mine`, {
+      headers: { ...jsonHeaders, ...bearer },
+    });
+    if (!r.ok) return [];
+    const data = (await r.json()) as MyParticipantSummary[];
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function getMyDeelnemer(email: string, competitionId?: number) {
+  const bearer = await participantAuthHeaders();
+  const qs = new URLSearchParams({ email: email.trim() });
+  if (competitionId != null && Number.isFinite(Number(competitionId))) {
+    qs.set("competition_id", String(Number(competitionId)));
+  }
+  const r = await fetch(`${apiBase()}/participants/by-email?${qs.toString()}`, {
     headers: { ...jsonHeaders, ...bearer },
   });
   if (!r.ok) return null;
@@ -375,15 +572,23 @@ export async function dbToevoegen(deelnemer: {
   email?: string;
   systeem?: string;
   spelers?: unknown[];
+  competition_id?: number;
+  competition_name?: string;
 }) {
   const bearer = await participantAuthHeaders();
-  const body = {
+  const body: Record<string, unknown> = {
     naam: deelnemer.naam,
     teamnaam: deelnemer.teamnaam || "",
     email: deelnemer.email || "",
     systeem: deelnemer.systeem || "",
     spelers: JSON.stringify(deelnemer.spelers || []),
   };
+  if (deelnemer.competition_id != null && Number.isFinite(Number(deelnemer.competition_id))) {
+    body.competition_id = Number(deelnemer.competition_id);
+  }
+  if (deelnemer.competition_name != null && String(deelnemer.competition_name).trim()) {
+    body.competition_name = String(deelnemer.competition_name).trim();
+  }
   const r = await fetch(`${apiBase()}/participants`, {
     method: "POST",
     headers: { ...jsonHeaders, ...bearer, Prefer: "return=representation" },
@@ -500,4 +705,193 @@ export async function adminUpdateFixtureMapping(
   });
   if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
   return await r.json();
+}
+
+/** Competitions you own (requires logged-in session). */
+export async function myListCompetitions() {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(`${apiBase()}/my-competitions`, {
+    headers: { ...jsonHeaders, ...bearer },
+  });
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  const data = await r.json();
+  return Array.isArray(data) ? data : [];
+}
+
+export async function myCreateCompetition(body: {
+  slug: string;
+  name: string;
+  season_label?: string;
+  starts_at?: string;
+  metadata?: Record<string, unknown>;
+}) {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(`${apiBase()}/my-competitions`, {
+    method: "POST",
+    headers: { ...jsonHeaders, ...bearer },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  return await r.json();
+}
+
+/** Single competition you can manage (owner or platform operator). */
+export async function myGetMyCompetition(id: number | string) {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(`${apiBase()}/my-competitions/${encodeURIComponent(String(id))}`, {
+    headers: { ...jsonHeaders, ...bearer },
+  });
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  return (await r.json()) as Record<string, unknown>;
+}
+
+export async function myPatchMyCompetition(
+  id: number | string,
+  body: Partial<{
+    slug: string;
+    name: string;
+    season_label: string | null;
+    starts_at: string | null;
+    metadata: Record<string, unknown>;
+  }>,
+) {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(`${apiBase()}/my-competitions/${id}`, {
+    method: "PATCH",
+    headers: { ...jsonHeaders, ...bearer },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  return await r.json();
+}
+
+/** Replace all editable fields at once (PUT). Send `null` for season_label / starts_at to clear. */
+export async function myPutMyCompetition(
+  id: number | string,
+  body: {
+    slug: string;
+    name: string;
+    season_label: string | null;
+    starts_at: string | null;
+    metadata: Record<string, unknown>;
+  },
+) {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(`${apiBase()}/my-competitions/${encodeURIComponent(String(id))}`, {
+    method: "PUT",
+    headers: { ...jsonHeaders, ...bearer },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  return await r.json();
+}
+
+export async function myDeleteMyCompetition(id: number | string): Promise<void> {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(`${apiBase()}/my-competitions/${id}`, {
+    method: "DELETE",
+    headers: { ...jsonHeaders, ...bearer },
+  });
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+}
+
+export async function myListCompetitionParticipants(competitionId: number | string) {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(
+    `${apiBase()}/my-competitions/${encodeURIComponent(String(competitionId))}/participants`,
+    { headers: { ...jsonHeaders, ...bearer } },
+  );
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  const data = await r.json();
+  return Array.isArray(data) ? data : [];
+}
+
+export async function myListCompetitionFixtureMappings(competitionId: number | string) {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(
+    `${apiBase()}/my-competitions/${encodeURIComponent(String(competitionId))}/fixture-mappings`,
+    { headers: { ...jsonHeaders, ...bearer } },
+  );
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  const data = await r.json();
+  return Array.isArray(data) ? data : [];
+}
+
+export async function myPatchCompetitionFixtureMapping(
+  competitionId: number | string,
+  mappingId: number | string,
+  api_fixture_id: number | null,
+) {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(
+    `${apiBase()}/my-competitions/${encodeURIComponent(String(competitionId))}/fixture-mappings/${encodeURIComponent(String(mappingId))}`,
+    {
+      method: "PATCH",
+      headers: { ...jsonHeaders, ...bearer },
+      body: JSON.stringify({ api_fixture_id }),
+    },
+  );
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  return await r.json();
+}
+
+export async function invitePreview(token: string) {
+  const r = await fetch(`${apiBase()}/invites/preview?token=${encodeURIComponent(token)}`, {
+    headers: { ...jsonHeaders },
+  });
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  return (await r.json()) as {
+    competitionId: number;
+    name: string;
+    slug: string;
+    alreadyUsed?: boolean;
+  };
+}
+
+export async function inviteAccept(token: string) {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(`${apiBase()}/invites/accept`, {
+    method: "POST",
+    headers: { ...jsonHeaders, ...bearer },
+    body: JSON.stringify({ token }),
+  });
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  return (await r.json()) as {
+    ok: boolean;
+    alreadyMember?: boolean;
+    competitionId: number;
+    competitionName: string;
+    slug: string;
+  };
+}
+
+export async function mySendCompetitionInvite(competitionId: number | string, email: string) {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(
+    `${apiBase()}/my-competitions/${encodeURIComponent(String(competitionId))}/invites`,
+    {
+      method: "POST",
+      headers: { ...jsonHeaders, ...bearer },
+      body: JSON.stringify({ email: email.trim() }),
+    },
+  );
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  return (await r.json()) as {
+    ok: boolean;
+    inviteUrl: string;
+    emailed: boolean;
+    emailReason?: string;
+    expires_at: string;
+  };
+}
+
+export async function myListCompetitionInvites(competitionId: number | string) {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(
+    `${apiBase()}/my-competitions/${encodeURIComponent(String(competitionId))}/invites`,
+    { headers: { ...jsonHeaders, ...bearer } },
+  );
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  const data = await r.json();
+  return Array.isArray(data) ? data : [];
 }

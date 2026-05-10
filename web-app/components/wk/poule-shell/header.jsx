@@ -4,8 +4,6 @@ import React, { useState } from "react";
 import { useApp } from "../poule-context.jsx";
 import { LANGUAGES, TIMEZONES } from "../../../lib/wk/locale";
 import { PHOTOS } from "./constants.js";
-import { authSignInWithPassword, authSignOut } from "../../../lib/wk/api-client";
-import { getAdminUid } from "../../../lib/wk/config";
 
 export function Header() {
   const { t } = useApp();
@@ -47,58 +45,7 @@ export function Header() {
 //  SETTINGS MODAL
 // ═══════════════════════════════════════════════════════════════
 export function SettingsModal(props) {
-  const { theme, setTheme, lang, setLang, currentLang, t, tz, setTz, adminMode, setAdminMode, setTab } = useApp();
-  const [showAdminLogin, setShowAdminLogin] = useState(false);
-  const [adminEmail, setAdminEmail] = useState("");
-  const [pw, setPw] = useState("");
-  const [pwErr, setPwErr] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function tryLogin() {
-    const email = adminEmail.trim();
-    if (!email || !pw) {
-      setPwErr("Email and password are required.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const login = await authSignInWithPassword(email, pw);
-      const u = login.user;
-      const uid = u && typeof u === "object" && typeof u.id === "string" ? u.id : "";
-      if (uid && uid === getAdminUid()) {
-        setAdminMode(true);
-        setShowAdminLogin(false);
-        setAdminEmail("");
-        setPw("");
-        setPwErr("");
-        props.onClose();
-        setTab("admin");
-        return;
-      }
-      await authSignOut(login.access_token);
-      setPwErr("This account is not authorized as admin.");
-    } catch (e) {
-      setPwErr(String(e?.message || "Admin login failed"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function logoutAdmin() {
-    try {
-      await authSignOut(undefined);
-    } catch {
-      /* ignore */
-    } finally {
-      setAdminMode(false);
-      setAdminEmail("");
-      setPw("");
-      setPwErr("");
-      setShowAdminLogin(false);
-      props.onClose();
-      setTab("ranking");
-    }
-  }
+  const { theme, setTheme, lang, setLang, currentLang, t, tz, setTz, adminMode, setTab } = useApp();
 
   return (
     <div className="modal-backdrop" onClick={props.onClose}>
@@ -156,50 +103,26 @@ export function SettingsModal(props) {
           </select>
         </div>
 
-        {/* ADMIN LOGIN / LOGOUT */}
-        <div className="settings-section settings-admin-section">
-          {!adminMode ? (
-            !showAdminLogin ? (
-              <button className="settings-admin-btn" onClick={function(){setShowAdminLogin(true);}}>
-                🔒 {t.adminLogin || "Beheer login"}
-              </button>
-            ) : (
-              <div>
-                <div className="settings-label" style={{marginBottom:8}}>{t.adminLogin || "Beheer login"}</div>
-                <input
-                  type="email"
-                  placeholder={t.email || "Email"}
-                  value={adminEmail}
-                  onChange={function(e){setAdminEmail(e.target.value); setPwErr("");}}
-                  onKeyDown={function(e){if(e.key==="Enter") tryLogin();}}
-                  style={{margin:"0 0 8px"}}
-                  autoFocus
-                />
-                <input
-                  type="password"
-                  placeholder={t.password || "Wachtwoord"}
-                  value={pw}
-                  onChange={function(e){setPw(e.target.value); setPwErr("");}}
-                  onKeyDown={function(e){if(e.key==="Enter") tryLogin();}}
-                  style={{margin:"0 0 8px"}}
-                />
-                {pwErr && <div className="error" style={{marginBottom:8}}>{pwErr}</div>}
-                <div style={{display:"flex", gap:8}}>
-                  <button className="btn btn-outline" onClick={function(){setShowAdminLogin(false); setAdminEmail(""); setPw(""); setPwErr("");}} style={{flex:1}}>
-                    {t.cancel || "Annuleren"}
-                  </button>
-                  <button className="btn" onClick={tryLogin} style={{flex:1}} disabled={busy}>
-                    {busy ? "…" : (t.login || "Inloggen")}
-                  </button>
-                </div>
-              </div>
-            )
-          ) : (
-            <button className="settings-admin-btn settings-admin-active" onClick={logoutAdmin}>
-              ✓ {t.adminLoggedIn || "Ingelogd als beheerder"} — {t.logout || "Uitloggen"}
+        {adminMode ? (
+          <div className="settings-section settings-admin-section">
+            <div className="settings-label" style={{ marginBottom: 8 }}>
+              {t.superadminLabel || "Superadmin"}
+            </div>
+            <p style={{ fontSize: 12, color: "var(--fg-muted)", margin: "0 0 10px", lineHeight: 1.45 }}>
+              {t.superadminHint || "Full access. The Admin tab is only visible to this account."}
+            </p>
+            <button
+              className="settings-admin-btn settings-admin-active"
+              type="button"
+              onClick={function() {
+                setTab("admin");
+                props.onClose();
+              }}
+            >
+              {t.openAdminPanel || "Open admin panel"}
             </button>
-          )}
-        </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );

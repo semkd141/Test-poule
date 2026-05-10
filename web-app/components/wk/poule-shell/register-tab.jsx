@@ -3,13 +3,22 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useApp } from "../poule-context.jsx";
 import { FORMATIONS, flag } from "../../../lib/wk/tournament";
-import { authGetValidSession, dbToevoegen } from "../../../lib/wk/api-client";
+import {
+  authGetValidSession,
+  dbToevoegen,
+  joinCompetition,
+  listPublicCompetitions,
+  persistSupabaseSessionToWkStorage,
+  readSelectedCompetition,
+  writeSelectedCompetition,
+  consumeRegisterSkipCompetitionStep,
+} from "../../../lib/wk/api-client";
+import { getSupabaseBrowser } from "../../../lib/wk/supabase-browser";
 import { CaptainBand } from "./teams/captain-band.jsx";
 import { CountryPicker } from "./country-picker.jsx";
 
 export function RegisterTab() {
-  const { t, participants, config, reloadParticipants, wkSpelers } = useApp();
-  const [step, setStep] = useState(1);
+  const { t, config, reloadParticipants, wkSpelers, inviteRegistration, clearInviteRegistration } = useApp();
   const [form, setForm] = useState({ naam:"", teamnaam:"", email:"", systeem:"4-3-3" });
   const [spelers, setSpelers] = useState({ keeper:[null], def:[null,null,null,null], mid:[null,null,null], att:[null,null,null], coach:[null] });
   const [captain, setCaptain] = useState(null); // { pos, index } — which slot is captain
@@ -19,8 +28,164 @@ export function RegisterTab() {
   const [openPicker, setOpenPicker] = useState(null);
   const [openPlayerPicker, setOpenPlayerPicker] = useState(null);
 
-  const deadlinePassed = Date.now() > config.deadline.getTime();
+  var registeringForInvite =
+    inviteRegistration && typeof inviteRegistration.competitionId === "number";
   const formation = FORMATIONS[form.systeem];
+
+  const [step, setStep] = useState(registeringForInvite ? 1 : 0);
+  const [publicComps, setPublicComps] = useState([]);
+  const [compsLoading, setCompsLoading] = useState(false);
+  const [compSelectId, setCompSelectId] = useState("");
+
+  useEffect(
+    function() {
+      if (!inviteRegistration || typeof inviteRegistration.competitionId !== "number") return;
+      writeSelectedCompetition({
+        id: inviteRegistration.competitionId,
+        name: inviteRegistration.name || "Pool",
+      });
+    },
+    [inviteRegistration],
+  );
+
+  /** Invite flow skipped the non-invite auth listener; sync Supabase → WK storage so POST /participants sends Bearer. */
+  useEffect(
+    function() {
+      if (!registeringForInvite) return undefined;
+      var sb = getSupabaseBrowser();
+      if (!sb) return undefined;
+      sb.auth.getSession().then(function(gr) {
+        var s = gr.data.session;
+        if (s && s.access_token && s.user) {
+          persistSupabaseSessionToWkStorage({
+            access_token: s.access_token,
+            refresh_token: s.refresh_token,
+            expires_at: s.expires_at,
+            expires_in: s.expires_in,
+            user: s.user,
+          });
+        }
+      });
+      var r = sb.auth.onAuthStateChange(function(_evt, sess) {
+        if (sess && sess.access_token && sess.user) {
+          persistSupabaseSessionToWkStorage({
+            access_token: sess.access_token,
+            refresh_token: sess.refresh_token,
+            expires_at: sess.expires_at,
+            expires_in: sess.expires_in,
+            user: sess.user,
+          });
+        }
+      });
+      return function() {
+        if (r && r.data && r.data.subscription) r.data.subscription.unsubscribe();
+      };
+    },
+    [registeringForInvite],
+  );
+
+  useEffect(
+    function() {
+      if (registeringForInvite) return;
+      var cancelled = false;
+      setCompsLoading(true);
+      listPublicCompetitions().then(function(rows) {
+        if (cancelled) return;
+        setPublicComps(Array.isArray(rows) ? rows : []);
+        var st = readSelectedCompetition();
+        if (st && st.id) setCompSelectId(String(st.id));
+      }).finally(function() {
+        if (!cancelled) setCompsLoading(false);
+      });
+      return function() {
+        cancelled = true;
+      };
+    },
+    [registeringForInvite],
+  );
+
+  useEffect(
+    function() {
+      if (inviteRegistration && typeof inviteRegistration.competitionId === "number") {
+        setStep(1);
+      }
+    },
+    [inviteRegistration],
+  );
+
+  useEffect(
+    function() {
+      if (registeringForInvite) return;
+      if (!consumeRegisterSkipCompetitionStep()) return;
+      var sel = readSelectedCompetition();
+      if (sel && sel.id) {
+        setCompSelectId(String(sel.id));
+        setStep(1);
+        authGetValidSession().then(function(sess) {
+          if (!sess || !sess.access_token) return;
+          joinCompetition(sel.id).catch(function(err) {
+            setError(String(err && err.message ? err.message : err));
+          });
+        });
+      }
+    },
+    [registeringForInvite],
+  );
+
+  /** After sign-in (e.g. user opened Register from All competitions before logging in), record pool membership. */
+  useEffect(
+    function() {
+      if (registeringForInvite) return undefined;
+      if (step < 1) return undefined;
+      var sb = getSupabaseBrowser();
+      if (!sb) return undefined;
+      var r = sb.auth.onAuthStateChange(function(_evt, sess) {
+        if (sess && sess.access_token && sess.user) {
+          persistSupabaseSessionToWkStorage({
+            access_token: sess.access_token,
+            refresh_token: sess.refresh_token,
+            expires_at: sess.expires_at,
+            expires_in: sess.expires_in,
+            user: sess.user,
+          });
+        }
+        if (!sess || !sess.access_token) return;
+        var sel = readSelectedCompetition();
+        if (!sel || !sel.id) return;
+        joinCompetition(sel.id).catch(function(err) {
+          setError(String(err && err.message ? err.message : err));
+        });
+      });
+      return function() {
+        if (r && r.data && r.data.subscription) r.data.subscription.unsubscribe();
+      };
+    },
+    [step, registeringForInvite],
+  );
+
+  const deadlinePassed = useMemo(
+    function() {
+      if (registeringForInvite) return false;
+      if (!registeringForInvite && step === 0 && compSelectId) {
+        var crow = publicComps.find(function(c) {
+          return Number(c.id) === parseInt(compSelectId, 10);
+        });
+        if (crow && typeof crow.registration_open === "boolean") return !crow.registration_open;
+        if (crow && crow.registration_deadline) {
+          var t0 = new Date(crow.registration_deadline).getTime();
+          if (!Number.isNaN(t0)) return Date.now() > t0;
+        }
+      }
+      var sel = readSelectedCompetition();
+      if (step >= 1 && sel && typeof sel.registration_open === "boolean") return !sel.registration_open;
+      if (step >= 1 && sel && sel.registration_deadline) {
+        var t1 = new Date(sel.registration_deadline).getTime();
+        if (!Number.isNaN(t1)) return Date.now() > t1;
+      }
+      return Date.now() > config.deadline.getTime();
+    },
+    [registeringForInvite, config.deadline, step, compSelectId, publicComps],
+  );
 
   // Index wk_spelers by land+positie for fast lookup
   const spelersByLandPos = useMemo(function() {
@@ -87,6 +252,30 @@ export function RegisterTab() {
 
   function handleNext() {
     setError("");
+    if (!registeringForInvite && step === 0) {
+      var cid = parseInt(compSelectId, 10);
+      if (!Number.isFinite(cid) || cid <= 0) return setError("Kies een competitie.");
+      var crow = publicComps.find(function(c) {
+        return Number(c.id) === cid;
+      });
+      writeSelectedCompetition({
+        id: cid,
+        name: crow && crow.name ? String(crow.name) : "Pool",
+        slug: crow && crow.slug ? String(crow.slug) : undefined,
+        registration_deadline:
+          crow && typeof crow.registration_deadline === "string" ? crow.registration_deadline : undefined,
+        registration_open:
+          crow && typeof crow.registration_open === "boolean" ? crow.registration_open : undefined,
+      });
+      setStep(1);
+      authGetValidSession().then(function(sess) {
+        if (!sess || !sess.access_token) return;
+        joinCompetition(cid).catch(function(err) {
+          setError(String(err && err.message ? err.message : err));
+        });
+      });
+      return;
+    }
     if (!form.naam.trim()) return setError("Vul je naam in");
     if (!form.teamnaam.trim()) return setError("Vul een teamnaam in");
     if (!form.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) return setError("Geldig e-mailadres vereist");
@@ -201,26 +390,68 @@ export function RegisterTab() {
       punten: 0
     }]);
 
-    const emailLower = form.email.trim().toLowerCase();
-    const isDup = participants.some(function(p) {
-      return (p.email || "").toLowerCase() === emailLower;
-    });
-    if (isDup) return setError(t.duplicateEmail || "Dit e-mailadres is al geregistreerd. Eén team per e-mailadres toegestaan.");
+    var dupCompId;
+    if (registeringForInvite && typeof inviteRegistration.competitionId === "number") {
+      dupCompId = inviteRegistration.competitionId;
+    } else if (!registeringForInvite) {
+      var fromSelect = parseInt(String(compSelectId || "").trim(), 10);
+      var sel = readSelectedCompetition();
+      var fromSession = sel && typeof sel.id === "number" ? sel.id : parseInt(String(sel && sel.id), 10);
+      dupCompId = Number.isFinite(fromSelect) && fromSelect > 0 ? fromSelect : fromSession;
+      if (!Number.isFinite(dupCompId) || dupCompId <= 0) {
+        return setError("Kies een competitie (stap 1).");
+      }
+      var syncRow = publicComps.find(function(c) {
+        return Number(c.id) === Number(dupCompId);
+      });
+      writeSelectedCompetition({
+        id: dupCompId,
+        name: syncRow && syncRow.name ? String(syncRow.name) : sel && sel.name ? String(sel.name) : "Pool",
+        slug: syncRow && typeof syncRow.slug === "string" ? syncRow.slug : sel && sel.slug ? sel.slug : undefined,
+        registration_deadline:
+          syncRow && typeof syncRow.registration_deadline === "string" ? syncRow.registration_deadline : sel?.registration_deadline,
+        registration_open:
+          typeof syncRow?.registration_open === "boolean" ? syncRow.registration_open : sel?.registration_open,
+      });
+    }
 
     setSubmitting(true);
     try {
-      await dbToevoegen({
+      var toevoegenPayload = {
         naam: form.naam.trim(),
         teamnaam: form.teamnaam.trim(),
         email: form.email.trim(),
         systeem: form.systeem,
-        spelers: flat
-      });
+        spelers: flat,
+      };
+      if (registeringForInvite) {
+        toevoegenPayload.competition_id = inviteRegistration.competitionId;
+        toevoegenPayload.competition_name = inviteRegistration.name || "Pool";
+      } else {
+        var crow = publicComps.find(function(c) {
+          return Number(c.id) === Number(dupCompId);
+        });
+        toevoegenPayload.competition_id = dupCompId;
+        toevoegenPayload.competition_name = crow && crow.name ? String(crow.name) : "Pool";
+      }
+      await dbToevoegen(toevoegenPayload);
       setSuccess(true);
+      if (registeringForInvite && typeof clearInviteRegistration === "function") {
+        clearInviteRegistration();
+      }
       await reloadParticipants();
     } catch (e) {
       console.error(e);
-      setError("Fout bij inschrijven: " + (e.message || "onbekend"));
+      var errMsg = e && e.message ? String(e.message) : "";
+      if (errMsg.indexOf("(409)") !== -1 || /already registered for this competition/i.test(errMsg)) {
+        setError(
+          t.duplicateRegistration ||
+            t.duplicateEmail ||
+            "This email already has a team in this competition.",
+        );
+      } else {
+        setError("Fout bij inschrijven: " + (errMsg || "onbekend"));
+      }
     } finally {
       setSubmitting(false);
     }
@@ -228,14 +459,74 @@ export function RegisterTab() {
 
   return (
     <div className="card">
-      <div className="step-indicator">
-        <div className={"step-dot " + (step >= 1 ? "active" : "")}>1</div>
-        <div className={"step-line " + (step >= 2 ? "active" : "")}></div>
-        <div className={"step-dot " + (step >= 2 ? "active" : "")}>2</div>
-      </div>
+      {registeringForInvite ? (
+        <div
+          style={{
+            marginBottom: 14,
+            padding: "10px 12px",
+            borderRadius: 8,
+            background: "var(--bg-3)",
+            border: "1px solid var(--orange)",
+            fontSize: 14,
+          }}
+        >
+          {(t.registerInviteBanner || "You are joining pool:") + " "}
+          <strong>{inviteRegistration.name || "—"}</strong>
+        </div>
+      ) : null}
+      {registeringForInvite ? (
+        <div className="step-indicator">
+          <div className={"step-dot " + (step >= 1 ? "active" : "")}>1</div>
+          <div className={"step-line " + (step >= 2 ? "active" : "")}></div>
+          <div className={"step-dot " + (step >= 2 ? "active" : "")}>2</div>
+        </div>
+      ) : (
+        <div className="step-indicator">
+          <div className={"step-dot " + (step >= 0 ? "active" : "")}>1</div>
+          <div className={"step-line " + (step >= 1 ? "active" : "")}></div>
+          <div className={"step-dot " + (step >= 1 ? "active" : "")}>2</div>
+          <div className={"step-line " + (step >= 2 ? "active" : "")}></div>
+          <div className={"step-dot " + (step >= 2 ? "active" : "")}>3</div>
+        </div>
+      )}
       <div style={{fontSize:13,color:"var(--fg-muted)",marginBottom:14}}>
         {t.deadlineBefore} <strong style={{color:"var(--orange)"}}>{config.deadlineLabel}</strong>
       </div>
+
+      {!registeringForInvite && step === 0 && (
+        <React.Fragment>
+          <div className="card-title">Competitie</div>
+          <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:14,lineHeight:1.6}}>
+            Kies eerst de pool waarvoor je je team inschrijft. Dezelfde keuze wordt onthouden voor het tabblad Mijn team.
+          </p>
+          {compsLoading ? (
+            <div style={{fontSize:13,color:"var(--fg-muted)",marginBottom:14}}>Laden…</div>
+          ) : (
+            <React.Fragment>
+              <label style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>
+                Competition
+              </label>
+              <select
+                value={compSelectId}
+                onChange={function(e){ setCompSelectId(e.target.value); }}
+                style={{width:"100%",maxWidth:420,marginBottom:16}}
+              >
+                <option value="">Selecteer…</option>
+                {publicComps.map(function(c) {
+                  var label = (c.name || c.slug || "Pool") + (c.season_label ? " · " + c.season_label : "");
+                  return (
+                    <option key={String(c.id)} value={String(c.id)}>{label}</option>
+                  );
+                })}
+              </select>
+            </React.Fragment>
+          )}
+          {error && <div className="error">{error}</div>}
+          <button className="btn" onClick={handleNext} disabled={compsLoading}>
+            {t.next} →
+          </button>
+        </React.Fragment>
+      )}
 
       {step === 1 && (
         <React.Fragment>
@@ -251,7 +542,14 @@ export function RegisterTab() {
             {Object.keys(FORMATIONS).map(function(k) { return <option key={k} value={k}>{k}</option>; })}
           </select>
           {error && <div className="error">{error}</div>}
-          <button className="btn" onClick={handleNext}>{t.next} →</button>
+          <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:8}}>
+            {!registeringForInvite ? (
+              <button type="button" className="btn btn-outline" onClick={function(){ setStep(0); }}>
+                ← {t.back}
+              </button>
+            ) : null}
+            <button className="btn" onClick={handleNext}>{t.next} →</button>
+          </div>
         </React.Fragment>
       )}
 

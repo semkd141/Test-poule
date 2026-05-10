@@ -7,8 +7,8 @@ export function Tabs(props) {
   const { t, adminMode } = useApp();
   // Admin tab only visible if logged in as admin (via gear menu)
   const keys = adminMode
-    ? ["ranking","matches","results","teams","register","edit","rules","admin"]
-    : ["ranking","matches","results","teams","register","edit","rules"];
+    ? ["ranking","matches","results","teams","competitions","register","edit","rules","competition","admin"]
+    : ["ranking","matches","results","teams","competitions","register","edit","rules","competition"];
   const wrapRef = useRef(null);
   const navRef = useRef(null);
   const [hasOverflow, setHasOverflow] = useState(false);
