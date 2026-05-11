@@ -3,7 +3,7 @@
 import React, { useState, useMemo } from "react";
 import { useApp } from "../poule-context.jsx";
 import { GROUPS, GROUP_MATCHES, KNOCKOUT } from "../../../lib/wk/tournament";
-import { TIMEZONES } from "../../../lib/wk/locale";
+import { getTimezoneBannerInfo, WC2026_SCHEDULE_IANA } from "../../../lib/wk/competition-timezone";
 import { formatDateLocalized } from "../../../lib/wk/datetime";
 
 export function MatchesTab() {
@@ -24,20 +24,22 @@ export function MatchesTab() {
 }
 
 function ScheduleView() {
-  const { lang, t, tz } = useApp();
+  const { lang, t } = useApp();
+  const m2 = t.matches2Tab || {};
+  const scheduleTz = WC2026_SCHEDULE_IANA;
 
-  const currentTzInfo = TIMEZONES.find(function(z) { return z.tz === tz; }) || TIMEZONES[1];
+  const currentTzInfo = getTimezoneBannerInfo(scheduleTz);
 
   const grouped = useMemo(function() {
     const map = new Map();
     GROUP_MATCHES.forEach(function(mt) {
-      const info = formatDateLocalized(mt.date, mt.time, lang, tz);
+      const info = formatDateLocalized(mt.date, mt.time, lang, scheduleTz);
       const key = info.dateObj.toISOString().slice(0,10) + "|" + info.dateLabel;
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(mt);
     });
     return Array.from(map.entries()).sort(function(a, b) { return a[0].localeCompare(b[0]); });
-  }, [lang, tz]);
+  }, [lang, scheduleTz]);
 
   return (
     <React.Fragment>
@@ -56,10 +58,13 @@ function ScheduleView() {
         <div style={{flex:1, minWidth:160}}>
           <div style={{fontSize:10,letterSpacing:"0.15em",color:"var(--orange)",fontWeight:700,textTransform:"uppercase",marginBottom:2}}>{t.timezoneInfo}</div>
           <div style={{fontFamily:"var(--wk-heading-font)",fontSize:18,letterSpacing:"0.05em"}}>
-            {currentTzInfo.flag} {currentTzInfo.label} ({currentTzInfo.short})
+            {currentTzInfo.flag} {currentTzInfo.label}
+            {currentTzInfo.short ? " (" + currentTzInfo.short + ")" : ""}
           </div>
         </div>
-        <div style={{fontSize:11,color:"var(--fg-muted)",fontStyle:"italic"}}>{t.changeInSettings || "Wijzig in instellingen ⚙️"}</div>
+        <div style={{fontSize:11,color:"var(--fg-muted)",fontStyle:"italic"}}>
+          {m2.competitionScheduleNote || "Times use this competition’s official schedule timezone."}
+        </div>
       </div>
       {grouped.map(function(entry) {
         const key = entry[0], matches = entry[1];
@@ -68,7 +73,7 @@ function ScheduleView() {
           <div key={key}>
             <div className="match-date-header">{dateLabel}</div>
             {matches.slice().sort(function(a, b) {
-              return formatDateLocalized(a.date,a.time,lang,tz).dateObj - formatDateLocalized(b.date,b.time,lang,tz).dateObj;
+              return formatDateLocalized(a.date,a.time,lang,scheduleTz).dateObj - formatDateLocalized(b.date,b.time,lang,scheduleTz).dateObj;
             }).map(function(mt, i) { return <MatchRow key={i} match={mt} />; })}
           </div>
         );
@@ -78,8 +83,8 @@ function ScheduleView() {
 }
 
 function MatchRow(props) {
-  const { lang, tz, t } = useApp();
-  const info = formatDateLocalized(props.match.date, props.match.time, lang, tz);
+  const { lang, t } = useApp();
+  const info = formatDateLocalized(props.match.date, props.match.time, lang, WC2026_SCHEDULE_IANA);
   return (
     <div className="match-row">
       <div><div className="match-team left">{props.match.home}</div></div>

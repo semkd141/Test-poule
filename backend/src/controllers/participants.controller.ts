@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import type { Env } from "../config/env.js";
+import type { AppLogger } from "../lib/logger.js";
 import type { SupabaseGateway } from "../services/supabase-gateway.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { HttpError } from "../shared/http-error.js";
@@ -15,6 +16,7 @@ import {
   shouldRedactSquadsBeforePoolStart,
 } from "../participant/competition-deadline.js";
 import { TransactionalEmailService } from "../services/transactional-email.js";
+import { getOrSyncFixtureStatistics } from "../services/fixture-statistics.service.js";
 
 const emailQuerySchema = z.object({
   email: z.string().min(1, "email query required"),
@@ -27,6 +29,10 @@ const idParamSchema = z.object({
 
 const competitionIdParamSchema = z.object({
   competitionId: z.coerce.number().int().positive(),
+});
+
+const fixtureStatisticsBodySchema = z.object({
+  fixtureId: z.coerce.number().int().positive(),
 });
 
 function resolveJoinCompetitionId(req: Request): number {
@@ -72,14 +78,19 @@ export type ParticipantsHandlers = {
   listParticipants: ReturnType<typeof asyncHandler>;
   listLeaderboard: ReturnType<typeof asyncHandler>;
   findParticipantByEmail: ReturnType<typeof asyncHandler>;
+  listApiFootballLeagueTypes: ReturnType<typeof asyncHandler>;
   listPublicCompetitions: ReturnType<typeof asyncHandler>;
+  listPublicFixtureMappings: ReturnType<typeof asyncHandler>;
   listMyParticipants: ReturnType<typeof asyncHandler>;
+  listMyRegisterableCompetitions: ReturnType<typeof asyncHandler>;
+  listMyTeamCompetitions: ReturnType<typeof asyncHandler>;
   listPlayers: ReturnType<typeof asyncHandler>;
   joinCompetition: ReturnType<typeof asyncHandler>;
   createParticipant: ReturnType<typeof asyncHandler>;
   patchParticipantPlayers: ReturnType<typeof asyncHandler>;
   patchParticipant: ReturnType<typeof asyncHandler>;
   deleteParticipant: ReturnType<typeof asyncHandler>;
+  postCompetitionFixtureStatistics: ReturnType<typeof asyncHandler>;
 };
 
 function isAdminBySecret(req: Request, env: Env): boolean {
@@ -102,6 +113,12 @@ function isAdminBySecret(req: Request, env: Env): boolean {
 function asRows(data: unknown): Record<string, unknown>[] {
   if (!Array.isArray(data)) return [];
   return data.filter((x) => x && typeof x === "object" && !Array.isArray(x)) as Record<string, unknown>[];
+}
+
+function optionalTrimmedText(v: unknown): string | null {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  return s === "" ? null : s;
 }
 
 function slimPublicCreator(user: Record<string, unknown> | null): {
@@ -180,6 +197,49 @@ function attackerGoalsFromSpelers(raw: unknown): number {
   }, 0);
 }
 
+/** Public summary shape for registerable pools (no `creator` enrichment). */
+function mapCompetitionRowToPublicSummary(
+  r: Record<string, unknown>,
+  counts: Map<number, number>,
+): Record<string, unknown> {
+  const id = Number(r.id);
+  const ownerRaw = r.owner_user_id;
+  const ownerId =
+    ownerRaw !== undefined && ownerRaw !== null && String(ownerRaw).trim()
+      ? String(ownerRaw).trim()
+      : "";
+  const meta = r.metadata;
+  const comp = r as Record<string, unknown>;
+  const startsRaw = r.starts_at;
+  let registrationDeadline: string | null = null;
+  if (startsRaw !== undefined && startsRaw !== null && String(startsRaw).trim() !== "") {
+    const d = new Date(String(startsRaw));
+    if (!Number.isNaN(d.getTime())) registrationDeadline = d.toISOString();
+  }
+  const lid = r.api_football_league_id;
+  const apiFootballLeagueId =
+    lid !== undefined && lid !== null && String(lid).trim() !== "" && Number.isFinite(Number(lid))
+      ? Math.floor(Number(lid))
+      : null;
+  return {
+    id,
+    slug: r.slug,
+    name: r.name,
+    league_type: r.league_type != null && String(r.league_type).trim() ? String(r.league_type).trim() : null,
+    api_football_league_id: apiFootballLeagueId,
+    season_label: r.season_label ?? null,
+    starts_at: r.starts_at ?? null,
+    metadata: meta && typeof meta === "object" && !Array.isArray(meta) ? meta : {},
+    created_at: r.created_at ?? null,
+    owner_user_id: ownerId || null,
+    creator: null,
+    registration_deadline: registrationDeadline,
+    registration_deadline_label: null,
+    registration_open: !isRegistrationClosedByPoolStart(comp),
+    team_count: Number.isFinite(id) ? counts.get(id) ?? 0 : 0,
+  };
+}
+
 function redactForPublicSummary(row: Record<string, unknown>): Record<string, unknown> {
   return {
     id: row.id,
@@ -213,9 +273,18 @@ function filterRowsBeforePoolStart(
   });
 }
 
-export function createParticipantsHandlers(gateway: SupabaseGateway, env: Env): ParticipantsHandlers {
+export function createParticipantsHandlers(
+  gateway: SupabaseGateway,
+  env: Env,
+  log: AppLogger,
+): ParticipantsHandlers {
   const mailer = new TransactionalEmailService(env);
   return {
+    listApiFootballLeagueTypes: asyncHandler(async (_req: Request, res: Response) => {
+      const rows = await gateway.listApiFootballLeagueLookup();
+      res.json(rows);
+    }),
+
     listParticipants: asyncHandler(async (req: Request, res: Response) => {
       const data = await gateway.listParticipants();
       const rows = asRows(data);
@@ -331,10 +400,18 @@ export function createParticipantsHandlers(gateway: SupabaseGateway, env: Env): 
           const d = new Date(String(startsRaw));
           if (!Number.isNaN(d.getTime())) registrationDeadline = d.toISOString();
         }
+        const lid = r.api_football_league_id;
+        const apiFootballLeagueId =
+          lid !== undefined && lid !== null && String(lid).trim() !== "" && Number.isFinite(Number(lid))
+            ? Math.floor(Number(lid))
+            : null;
         return {
           id,
           slug: r.slug,
           name: r.name,
+          league_type:
+            r.league_type != null && String(r.league_type).trim() ? String(r.league_type).trim() : null,
+          api_football_league_id: apiFootballLeagueId,
           season_label: r.season_label ?? null,
           starts_at: r.starts_at ?? null,
           metadata:
@@ -348,6 +425,47 @@ export function createParticipantsHandlers(gateway: SupabaseGateway, env: Env): 
           team_count: Number.isFinite(id) ? counts.get(id) ?? 0 : 0,
         };
       });
+      res.json(out);
+    }),
+
+    listPublicFixtureMappings: asyncHandler(async (req: Request, res: Response) => {
+      const parsed = competitionIdParamSchema.safeParse(req.params);
+      if (!parsed.success) throw new HttpError(400, "Invalid competition id");
+      const competitionId = parsed.data.competitionId;
+      const comp = await gateway.getCompetitionById(String(competitionId));
+      if (!comp) throw new HttpError(404, "Competition not found");
+      const raw = await gateway.listFixtureMappings(competitionId);
+      const rows = asRows(raw);
+      const out = rows.map((r) => ({
+        id: r.id,
+        api_football_league_id: r.api_football_league_id,
+        season: r.season,
+        local_key: r.local_key ?? null,
+        api_fixture_id: r.api_fixture_id ?? null,
+        stage: r.stage ?? null,
+        kickoff_at: r.kickoff_at ?? null,
+        team_1: optionalTrimmedText(r.team_1),
+        team_2: optionalTrimmedText(r.team_2),
+        location: r.location ?? null,
+        created_at: r.created_at ?? null,
+      }));
+      log.info({out }, "listPublicFixtureMappings result");
+      res.json(out);
+    }),
+
+    postCompetitionFixtureStatistics: asyncHandler(async (req: Request, res: Response) => {
+      const parsed = competitionIdParamSchema.safeParse(req.params);
+      if (!parsed.success) throw new HttpError(400, "Invalid competition id");
+      const body = fixtureStatisticsBodySchema.safeParse(req.body ?? {});
+      if (!body.success) {
+        throw new HttpError(400, body.error.issues.map((i) => i.message).join("; "));
+      }
+      const out = await getOrSyncFixtureStatistics(
+        gateway,
+        env,
+        parsed.data.competitionId,
+        body.data.fixtureId,
+      );
       res.json(out);
     }),
 
@@ -367,6 +485,78 @@ export function createParticipantsHandlers(gateway: SupabaseGateway, env: Env): 
           teamnaam: r.teamnaam,
         })),
       );
+    }),
+
+    listMyRegisterableCompetitions: asyncHandler(async (req: Request, res: Response) => {
+      const jwt = req.supabaseUser;
+      const uid = jwt?.sub;
+      if (!uid || typeof uid !== "string") throw new HttpError(401, "Authorization required");
+
+      const memberIds = await gateway.listCompetitionMemberIdsForUser(uid);
+      const ownedRaw = await gateway.listCompetitionsByOwner(uid);
+      const ownedRows = asRows(ownedRaw);
+      const ownedIdSet = new Set<number>();
+      for (const row of ownedRows) {
+        const id = Number(row.id);
+        if (Number.isFinite(id) && id > 0) ownedIdSet.add(id);
+      }
+
+      /** Register tab: only pools the user joined (invite / public join), not pools they created. */
+      const idSet = new Set<number>();
+      for (const mid of memberIds) {
+        if (Number.isFinite(mid) && mid > 0 && !ownedIdSet.has(mid)) idSet.add(mid);
+      }
+
+      const allIds = [...idSet];
+      const raw =
+        allIds.length === 0 ? [] : await gateway.listCompetitionsByIds(allIds);
+      const rows = asRows(raw);
+      const counts = await gateway.fetchParticipantCountsByCompetition();
+      const out = rows.map((r) => mapCompetitionRowToPublicSummary(r, counts));
+      out.sort((a, b) => Number(a.id) - Number(b.id));
+      res.json(out);
+    }),
+
+    /**
+     * Pools relevant for My Team: `competition_members`, pools you own, or where you already have a deelnemer row.
+     * Not the full public catalogue.
+     */
+    listMyTeamCompetitions: asyncHandler(async (req: Request, res: Response) => {
+      const jwt = req.supabaseUser;
+      const uid = jwt?.sub;
+      const email = jwt?.email !== undefined ? normEmail(jwt.email) : "";
+      if (!uid || typeof uid !== "string") throw new HttpError(401, "Authorization required");
+
+      const memberIds = await gateway.listCompetitionMemberIdsForUser(uid);
+      const ownedRaw = await gateway.listCompetitionsByOwner(uid);
+      const ownedRows = asRows(ownedRaw);
+
+      const idSet = new Set<number>();
+      for (const mid of memberIds) {
+        if (Number.isFinite(mid) && mid > 0) idSet.add(mid);
+      }
+      for (const row of ownedRows) {
+        const id = Number(row.id);
+        if (Number.isFinite(id) && id > 0) idSet.add(id);
+      }
+      if (email) {
+        const mineData = await gateway.findAllParticipantsByEmail(email);
+        const mine = asRows(mineData).filter(
+          (r) => r.email !== "__config__" && canMutateParticipantRow(r as DeelnemerRow, jwt),
+        );
+        for (const r of mine) {
+          const cid = Number(r.competition_id);
+          if (Number.isFinite(cid) && cid > 0) idSet.add(cid);
+        }
+      }
+
+      const allIds = [...idSet];
+      const raw = allIds.length === 0 ? [] : await gateway.listCompetitionsByIds(allIds);
+      const rows = asRows(raw);
+      const counts = await gateway.fetchParticipantCountsByCompetition();
+      const out = rows.map((r) => mapCompetitionRowToPublicSummary(r, counts));
+      out.sort((a, b) => Number(a.id) - Number(b.id));
+      res.json(out);
     }),
 
     listPlayers: asyncHandler(async (_req: Request, res: Response) => {
@@ -431,6 +621,10 @@ export function createParticipantsHandlers(gateway: SupabaseGateway, env: Env): 
     createParticipant: asyncHandler(async (req: Request, res: Response) => {
       const body = asObjectBody(req.body);
       delete body.user_id;
+      /** Frontend may send `competitionId` (camelCase); DB + duplicate check use `competition_id`. */
+      if (body.competition_id == null && body.competitionId != null) {
+        body.competition_id = body.competitionId;
+      }
       const jwt = req.supabaseUser;
       const adminOk = isAdminBySecret(req, env);
       if (!adminOk) {
@@ -456,9 +650,9 @@ export function createParticipantsHandlers(gateway: SupabaseGateway, env: Env): 
           throw new HttpError(500, "Default competition id invalid");
         }
       }
-      const dup = asRows(
-        await gateway.findParticipantByEmailAndCompetition(normEmail(body.email), resolvedCompetitionId),
-      );
+      const emailNorm = normEmail(body.email);
+      /** One team per email per pool only; same email may register in other competitions. */
+      const dup = asRows(await gateway.findParticipantByEmailAndCompetition(emailNorm, resolvedCompetitionId));
       if (dup.length > 0) {
         throw new HttpError(409, "This email is already registered for this competition");
       }
@@ -477,6 +671,9 @@ export function createParticipantsHandlers(gateway: SupabaseGateway, env: Env): 
       if (!competitionName) competitionName = "WK 2026 Poule";
       const insertPayload = { ...body };
       delete insertPayload.competition_name;
+      delete insertPayload.competitionId;
+      insertPayload.competition_id = resolvedCompetitionId;
+      if (typeof insertPayload.email === "string") insertPayload.email = emailNorm;
       const data = await gateway.createParticipant(insertPayload);
       if (typeof body.email === "string" && body.email.trim()) {
         try {
