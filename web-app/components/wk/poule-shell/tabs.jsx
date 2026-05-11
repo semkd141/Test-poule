@@ -4,11 +4,13 @@ import React, { useState, useEffect, useRef } from "react";
 import { useApp } from "../poule-context.jsx";
 
 export function Tabs(props) {
-  const { t, adminMode } = useApp();
-  // Admin tab only visible if logged in as admin (via gear menu)
+  const { t, adminMode, showPoolPointsTab } = useApp();
+  const baseUser = ["ranking","matches","matches2","results","teams","competitions","register","edit","rules","competition"];
+  const userKeys = showPoolPointsTab ? baseUser.concat(["poolPoints"]) : baseUser.slice();
+  // Superadmin: Admin tab only. Other logged-in users: Points management tab (same tooling as Admin points, for their pools).
   const keys = adminMode
-    ? ["ranking","matches","results","teams","competitions","register","edit","rules","competition","admin"]
-    : ["ranking","matches","results","teams","competitions","register","edit","rules","competition"];
+    ? ["ranking","matches","matches2","results","teams","competitions","register","edit","rules","competition","admin"]
+    : userKeys;
   const wrapRef = useRef(null);
   const navRef = useRef(null);
   const [hasOverflow, setHasOverflow] = useState(false);

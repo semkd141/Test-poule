@@ -40,8 +40,25 @@ export const CITIES = {
   ny:"New York/NJ",phi:"Philadelphia",sf:"San Francisco Bay",sea:"Seattle"
 };
 
-export function mk(date, time, home, away, group, city) {
-  return { date, time, home, away, group, city };
+/** Wall-clock times in GROUP_MATCHES use this offset (CEST in June/July). DB `fixture_mappings.kickoff_at` matches. */
+export const WC2026_SCHEDULE_UTC_OFFSET = "+02:00";
+
+/** First group-stage kickoff; aligns with `competitions.starts_at` for slug `wc2026`. */
+export const WC2026_TOURNAMENT_START = Object.freeze({
+  date:"2026-06-11",
+  time:"18:00",
+  isoOffset:"2026-06-11T18:00:00+02:00",
+});
+
+/**
+ * One group-stage row: team1 vs team2, venue `location`, letter `group`.
+ * `home` / `away` / `city` are aliases for older UI (neutral order — not literal home/away).
+ */
+export function mk(date, time, team1, team2, group, location) {
+  return {
+    date, time, team1, team2, group, location,
+    home: team1, away: team2, city: location,
+  };
 }
 
 export const GROUP_MATCHES = [

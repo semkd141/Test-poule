@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useApp } from "../poule-context.jsx";
 import {
   authSaveSession,
@@ -14,7 +14,7 @@ import {
   persistSupabaseSessionToWkStorage,
   getMyDeelnemer,
   dbBijwerkenVeld,
-  listPublicCompetitions,
+  listMyTeamCompetitions,
   readSelectedCompetition,
   writeSelectedCompetition,
 } from "../../../lib/wk/api-client";
@@ -65,8 +65,18 @@ export function EditMyTeamTab() {
   const [publicComps, setPublicComps] = useState([]);
   const [competitionsLoading, setCompetitionsLoading] = useState(false);
   const [competitionSelectId, setCompetitionSelectId] = useState("");
+  /** Invalidate pool list when a different account signs in (avoids stale dropdown + wrong lookups). */
+  const lastSessionUserKeyRef = useRef("");
 
   const deadlinePassed = Date.now() > config.deadline.getTime();
+
+  function sessionUserKey(sess) {
+    if (!sess || !sess.user) return "";
+    var u = sess.user;
+    if (u.id != null && String(u.id).trim()) return "id:" + String(u.id).trim();
+    if (typeof u.email === "string" && u.email.trim()) return "em:" + u.email.trim().toLowerCase();
+    return "";
+  }
 
   const spelersByLandPos = useMemo(function() {
     const m = {};
@@ -167,6 +177,11 @@ export function EditMyTeamTab() {
     setSession(sess);
     const email = sess.user && sess.user.email;
     if (!email) { setAuthState("unauthenticated"); return; }
+    var sk = sessionUserKey(sess);
+    if (sk !== lastSessionUserKeyRef.current) {
+      lastSessionUserKeyRef.current = sk;
+      setPublicComps([]);
+    }
     const stored = typeof window !== "undefined" ? readSelectedCompetition() : null;
     if (!stored || !stored.id) {
       setMyTeam(null);
@@ -186,21 +201,31 @@ export function EditMyTeamTab() {
     }
   }
 
-  async function ensurePublicCompetitionsLoaded() {
-    if (publicComps.length > 0 || competitionsLoading) return;
-    setCompetitionsLoading(true);
+  /**
+   * Hits the API and returns the fresh list (do not rely on closure over `publicComps`).
+   * @param {{ background?: boolean }} opts - if background, skip full-card loading state (Continue / switch pool).
+   */
+  async function fetchMyTeamCompetitionsList(opts) {
+    var bg = opts && opts.background;
+    if (!bg) setCompetitionsLoading(true);
     try {
-      const rows = await listPublicCompetitions();
-      setPublicComps(Array.isArray(rows) ? rows : []);
+      var rows = await listMyTeamCompetitions();
+      var list = Array.isArray(rows) ? rows : [];
+      setPublicComps(list);
+      return list;
+    } catch (e) {
+      console.warn("listMyTeamCompetitions", e);
+      setPublicComps([]);
+      return [];
     } finally {
-      setCompetitionsLoading(false);
+      if (!bg) setCompetitionsLoading(false);
     }
   }
 
   useEffect(function() {
     if (authState !== "pick_competition" && authState !== "authenticated") return undefined;
     var cancelled = false;
-    ensurePublicCompetitionsLoaded().then(function() {
+    fetchMyTeamCompetitionsList({ background: false }).then(function() {
       if (cancelled) return;
       if (authState === "pick_competition") {
         var s = readSelectedCompetition();
@@ -213,7 +238,8 @@ export function EditMyTeamTab() {
   async function confirmPickCompetition() {
     var id = parseInt(competitionSelectId, 10);
     if (!Number.isFinite(id) || id <= 0) return;
-    var row = publicComps.find(function(c) { return Number(c.id) === id; });
+    var comps = await fetchMyTeamCompetitionsList({ background: true });
+    var row = comps.find(function(c) { return Number(c.id) === id; });
     var name = row && row.name ? String(row.name) : "Competition";
     writeSelectedCompetition({ id: id, name: name, slug: row && row.slug ? String(row.slug) : undefined });
     if (!session || !session.user || !session.user.email) return;
@@ -233,8 +259,8 @@ export function EditMyTeamTab() {
   async function switchCompetition(compId) {
     var id = Number(compId);
     if (!Number.isFinite(id) || id <= 0) return;
-    await ensurePublicCompetitionsLoaded();
-    var row = publicComps.find(function(c) { return Number(c.id) === id; });
+    var comps = await fetchMyTeamCompetitionsList({ background: true });
+    var row = comps.find(function(c) { return Number(c.id) === id; });
     var name = row && row.name ? String(row.name) : "Competition";
     writeSelectedCompetition({ id: id, name: name, slug: row && row.slug ? String(row.slug) : undefined });
     if (!session || !session.user || !session.user.email) return;
@@ -356,8 +382,11 @@ export function EditMyTeamTab() {
   async function signOut() {
     const s = authLoadSession();
     await authSignOut(s && s.access_token);
+    lastSessionUserKeyRef.current = "";
     setSession(null);
     setMyTeam(null);
+    setPublicComps([]);
+    setCompetitionSelectId("");
     setAuthState("unauthenticated");
     setEmailInput("");
   }
@@ -580,10 +609,20 @@ export function EditMyTeamTab() {
             Choose a competition
           </div>
           <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:14,lineHeight:1.6}}>
-            Select which pool you want to view or edit. This choice is remembered for this browser session.
+            Only pools you belong to (member), own, or already have a team in are listed—not every public competition.
+            This choice is remembered for this browser session.
           </p>
           {competitionsLoading ? (
-            <div style={{fontSize:13,color:"var(--fg-muted)"}}>Loading competitions…</div>
+            <div style={{fontSize:13,color:"var(--fg-muted)"}}>Loading your pools…</div>
+          ) : publicComps.length === 0 ? (
+            <React.Fragment>
+              <p style={{fontSize:13,color:"var(--fg-muted)",lineHeight:1.6,marginBottom:14}}>
+                No pools yet. Join one from <strong>Participate</strong> or accept an invitation, then return here.
+              </p>
+              <button type="button" className="btn btn-outline" onClick={signOut}>
+                Log out
+              </button>
+            </React.Fragment>
           ) : (
             <React.Fragment>
               <label style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",display:"block",marginBottom:6}}>Competition</label>

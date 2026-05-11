@@ -27,6 +27,7 @@ import { Header } from "./header.jsx";
 import { Tabs } from "./tabs.jsx";
 import { RankingTab } from "./ranking-tab.jsx";
 import { MatchesTab } from "./matches-tab.jsx";
+import { Matches2Tab } from "./matches2-tab.jsx";
 import { ResultsTab } from "./results-tab.jsx";
 import { TeamsTab } from "./teams/teams-tab.jsx";
 import { RegisterTab } from "./register-tab.jsx";
@@ -35,6 +36,7 @@ import { RulesTab } from "./rules-tab.jsx";
 import { AdminTab } from "./admin/admin-tab.jsx";
 import { CompetitionTab } from "./competition-tab.jsx";
 import { AllCompetitionsTab } from "./all-competitions-tab.jsx";
+import { PoolPointsTab } from "./pool-points-tab.jsx";
 
 function uidFromJwt(token) {
   if (!token || typeof token !== "string") return "";
@@ -54,6 +56,10 @@ export function App() {
   const [tz, setTz] = usePersisted("wk26_tz", "Europe/London");
   /** True only when the signed-in user matches `NEXT_PUBLIC_SUPERADMIN_UID` (same as backend `ADMIN_UID`). */
   const [isSuperadmin, setIsSuperadmin] = useState(false);
+  /** Logged-in users who are not superadmin see Points management (same capabilities as Admin → points, scoped to their pools). */
+  const [showPoolPointsTab, setShowPoolPointsTab] = useState(false);
+  /** After first auth/role sync: avoids redirecting off #poolPoints before we know visibility. */
+  const [poolPointsVisibilityReady, setPoolPointsVisibilityReady] = useState(false);
 
   // Tab state: driven by URL hash so sharing a link works
   // Default for new visitors: 'register'
@@ -64,7 +70,7 @@ export function App() {
     var qp = new URLSearchParams(window.location.search);
     if (qp.has("code")) return "edit";
     var norm = raw === "/edit" || raw === "edit" ? "edit" : raw;
-    var valid = ["ranking","matches","results","teams","competitions","register","edit","rules","competition","admin"];
+    var valid = ["ranking","matches","matches2","results","teams","competitions","register","edit","rules","competition","poolPoints","admin"];
     if (norm && valid.indexOf(norm) !== -1) return norm;
     return "register";
   }
@@ -198,15 +204,14 @@ export function App() {
 
   useEffect(function() { loadParticipants(); }, [loadParticipants]);
 
+  /** Superadmin vs pool Points tab: run in one sequence so we never flash Points for superadmin. */
   useEffect(function() {
     var mounted = true;
     var adminUid = getSuperadminUid();
-    if (!adminUid) {
-      setIsSuperadmin(false);
-      return;
-    }
+    /** Latest-wins: overlapping auth/sync runs must not apply stale `showPoolPointsTab` (avoids tab unmount blink). */
+    var syncGen = 0;
 
-    async function recompute() {
+    async function resolveViewerUid() {
       var uid = "";
       try {
         var wk0 = await authGetValidSession();
@@ -235,13 +240,47 @@ export function App() {
           /* ignore */
         }
       }
-      if (mounted) setIsSuperadmin(Boolean(uid && uid === adminUid));
+      return uid;
     }
 
-    recompute();
+    /** Points tab in the nav for any signed-in participant (not superadmin); PoolPointsTab handles empty pools. */
+    async function updatePoolPointsVisibility(runId) {
+      try {
+        var s = await authGetValidSession();
+        if (!mounted || runId !== syncGen) return;
+        setShowPoolPointsTab(Boolean(s && s.access_token));
+      } catch {
+        if (!mounted || runId !== syncGen) return;
+        setShowPoolPointsTab(false);
+      }
+    }
+
+    async function syncRoleAndPoolTab() {
+      var runId = ++syncGen;
+      try {
+        if (!adminUid) {
+          if (mounted && runId === syncGen) setIsSuperadmin(false);
+          await updatePoolPointsVisibility(runId);
+          return;
+        }
+        var uid = await resolveViewerUid();
+        if (!mounted || runId !== syncGen) return;
+        var superuser = Boolean(uid && uid === adminUid);
+        setIsSuperadmin(superuser);
+        if (superuser) {
+          setShowPoolPointsTab(false);
+          return;
+        }
+        await updatePoolPointsVisibility(runId);
+      } finally {
+        if (mounted && runId === syncGen) setPoolPointsVisibilityReady(true);
+      }
+    }
+
+    syncRoleAndPoolTab();
 
     function onWkAuthStorage() {
-      recompute();
+      syncRoleAndPoolTab();
     }
     if (typeof window !== "undefined") {
       window.addEventListener(WK_AUTH_SESSION_EVENT, onWkAuthStorage);
@@ -251,7 +290,7 @@ export function App() {
     var sub = null;
     if (sb) {
       sub = sb.auth.onAuthStateChange(function() {
-        recompute();
+        syncRoleAndPoolTab();
       });
     }
     return function() {
@@ -266,6 +305,11 @@ export function App() {
   useEffect(function() {
     if (tab === "admin" && !isSuperadmin) setTab("ranking");
   }, [tab, isSuperadmin]);
+
+  useEffect(function() {
+    if (!poolPointsVisibilityReady) return;
+    if (tab === "poolPoints" && (!showPoolPointsTab || isSuperadmin)) setTab("ranking");
+  }, [tab, showPoolPointsTab, isSuperadmin, poolPointsVisibilityReady]);
 
   const ctx = {
     theme,
@@ -282,6 +326,7 @@ export function App() {
     loading,
     /** Only the configured superadmin UID sees the Admin tab. */
     adminMode: isSuperadmin,
+    showPoolPointsTab,
     setAdminMode: function() {
       /* no-op: admin access is tied to superadmin UID only */
     },
@@ -305,6 +350,7 @@ export function App() {
       <main className="main">
         {tab === "ranking" && <RankingTab />}
         {tab === "matches" && <MatchesTab />}
+        {tab === "matches2" && <Matches2Tab />}
         {tab === "results" && <ResultsTab />}
         {tab === "teams" && <TeamsTab />}
         {tab === "competitions" && <AllCompetitionsTab />}
@@ -312,6 +358,7 @@ export function App() {
         {tab === "edit" && <EditMyTeamTab />}
         {tab === "rules" && <RulesTab />}
         {tab === "competition" && <CompetitionTab />}
+        {tab === "poolPoints" && !isSuperadmin && showPoolPointsTab && <PoolPointsTab />}
         {tab === "admin" && isSuperadmin && <AdminTab />}
       </main>
     </AppCtx.Provider>

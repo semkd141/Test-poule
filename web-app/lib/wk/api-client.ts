@@ -37,6 +37,9 @@ export const WK_AUTH_SESSION_EVENT = "wk-auth-session-changed";
 /** `{ id, name, slug? }` — shared between Register and My Team */
 export const WK_SELECTED_COMPETITION_KEY = "wk_selected_competition";
 
+/** Fired on `window` after {@link writeSelectedCompetition} updates session storage (same tab). */
+export const WK_SELECTED_COMPETITION_EVENT = "wk-selected-competition-changed";
+
 export type WkSelectedCompetition = {
   id: number;
   name: string;
@@ -76,6 +79,7 @@ export function writeSelectedCompetition(c: WkSelectedCompetition): void {
   if (typeof window === "undefined") return;
   try {
     sessionStorage.setItem(WK_SELECTED_COMPETITION_KEY, JSON.stringify(c));
+    window.dispatchEvent(new Event(WK_SELECTED_COMPETITION_EVENT));
   } catch {
     /* ignore */
   }
@@ -435,10 +439,29 @@ function parseSpelersField(d: { spelers?: unknown }) {
   return Array.isArray(raw) ? raw : [];
 }
 
+export type ApiFootballLeagueOption = {
+  league_type: string;
+  league_id: number;
+};
+
+/** API-Football league ids for the competition create dropdown (`api_football_league_lookup`). */
+export async function listLeagueTypes(): Promise<ApiFootballLeagueOption[]> {
+  try {
+    const r = await fetch(`${apiBase()}/league-types`, { headers: jsonHeaders });
+    if (!r.ok) return [];
+    const data = (await r.json()) as unknown;
+    return Array.isArray(data) ? (data as ApiFootballLeagueOption[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 export type PublicCompetition = {
   id: number;
   slug?: string;
   name?: string;
+  league_type?: string | null;
+  api_football_league_id?: number | null;
   season_label?: string | null;
   starts_at?: string | null;
   metadata?: Record<string, unknown>;
@@ -464,6 +487,89 @@ export async function listPublicCompetitions(): Promise<PublicCompetition[]> {
   } catch {
     return [];
   }
+}
+
+/** Competitions you may pick on Register: pools you joined (e.g. invite / public), excluding pools you own (requires Bearer). */
+export async function listMyRegisterableCompetitions(): Promise<PublicCompetition[]> {
+  const bearer = await participantAuthHeaders();
+  if (!bearer.Authorization) return [];
+  const r = await fetch(`${apiBase()}/participants/registerable-competitions`, {
+    headers: { ...jsonHeaders, ...bearer },
+  });
+  if (r.status === 401) return [];
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  const data = (await r.json()) as PublicCompetition[];
+  return Array.isArray(data) ? data : [];
+}
+
+/** My Team tab dropdown: member pools, pools you own, or pools with your team — not the full public list (requires Bearer). */
+export async function listMyTeamCompetitions(): Promise<PublicCompetition[]> {
+  const bearer = await participantAuthHeaders();
+  if (!bearer.Authorization) return [];
+  const r = await fetch(`${apiBase()}/participants/my-team-competitions`, {
+    headers: { ...jsonHeaders, ...bearer },
+  });
+  if (r.status === 401) return [];
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  const data = (await r.json()) as PublicCompetition[];
+  return Array.isArray(data) ? data : [];
+}
+
+/** Mirrors `public.fixture_mappings` (league + season scope; shared across pools). */
+export type FixtureMappingPublic = {
+  id: number;
+  api_football_league_id: number;
+  season: number;
+  local_key: string | null;
+  api_fixture_id: number | null;
+  stage: string | null;
+  kickoff_at: string | null;
+  /** DB column `team_1` — first side name */
+  team_1: string | null;
+  /** DB column `team_2` — second side name */
+  team_2: string | null;
+  location: string | null;
+  created_at: string | null;
+};
+
+export async function listPublicFixtureMappings(competitionId: number): Promise<FixtureMappingPublic[]> {
+  const r = await fetch(
+    `${apiBase()}/competitions/${encodeURIComponent(String(competitionId))}/fixture-mappings`,
+    { headers: jsonHeaders, cache: "no-store" },
+  );
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  const data = (await r.json()) as unknown;
+  return Array.isArray(data) ? (data as FixtureMappingPublic[]) : [];
+}
+
+export type FixtureStatisticsPlayer = {
+  land: string;
+  speler_naam: string;
+  punten: number;
+};
+
+export type FixtureStatisticsResponse = {
+  source: "database" | "api_football";
+  match: Record<string, unknown>;
+  players: FixtureStatisticsPlayer[];
+};
+
+/** Load match + player_statistics from DB, or fetch from API-Football, persist, then return. */
+export async function fetchFixtureStatistics(
+  competitionId: number,
+  fixtureId: number,
+): Promise<FixtureStatisticsResponse> {
+  const r = await fetch(
+    `${apiBase()}/competitions/${encodeURIComponent(String(competitionId))}/fixture-statistics`,
+    {
+      method: "POST",
+      headers: { ...jsonHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ fixtureId }),
+      cache: "no-store",
+    },
+  );
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  return (await r.json()) as FixtureStatisticsResponse;
 }
 
 /** Registers the signed-in user in the pool (`competition_members`) so they can submit a team. Idempotent. */
@@ -660,6 +766,7 @@ export async function adminListCompetitions() {
 export async function adminCreateCompetition(body: {
   slug: string;
   name: string;
+  league_type: string;
   season_label?: string;
   starts_at?: string;
   metadata?: Record<string, unknown>;
@@ -683,9 +790,23 @@ export async function adminDeleteCompetition(id: number | string): Promise<void>
   if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
 }
 
-export async function adminListFixtureMappings(competitionId: number | string) {
+/**
+ * List fixture mappings (shared by league + season). Pass either `competitionId` (pool id, resolved server-side)
+ * or both `apiFootballLeagueId` and `season`.
+ */
+export async function adminListFixtureMappings(
+  competitionOrLeagueId: number | string,
+  season?: number,
+) {
   const bearer = await participantAuthHeaders();
-  const r = await fetch(`${apiBase()}/internal/fixture-mappings?competitionId=${encodeURIComponent(String(competitionId))}`, {
+  const qs = new URLSearchParams();
+  if (season !== undefined && season !== null) {
+    qs.set("leagueId", String(competitionOrLeagueId));
+    qs.set("season", String(season));
+  } else {
+    qs.set("competitionId", String(competitionOrLeagueId));
+  }
+  const r = await fetch(`${apiBase()}/internal/fixture-mappings?${qs.toString()}`, {
     headers: { ...jsonHeaders, ...bearer },
   });
   if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
@@ -721,6 +842,7 @@ export async function myListCompetitions() {
 export async function myCreateCompetition(body: {
   slug: string;
   name: string;
+  league_type: string;
   season_label?: string;
   starts_at?: string;
   metadata?: Record<string, unknown>;
@@ -750,6 +872,7 @@ export async function myPatchMyCompetition(
   body: Partial<{
     slug: string;
     name: string;
+    league_type: string;
     season_label: string | null;
     starts_at: string | null;
     metadata: Record<string, unknown>;
@@ -771,6 +894,7 @@ export async function myPutMyCompetition(
   body: {
     slug: string;
     name: string;
+    league_type: string;
     season_label: string | null;
     starts_at: string | null;
     metadata: Record<string, unknown>;
@@ -833,6 +957,52 @@ export async function myPatchCompetitionFixtureMapping(
   );
   if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
   return await r.json();
+}
+
+export async function myImportApiFootballFixtures(
+  competitionId: number | string,
+  body?: { league?: number; season?: number },
+) {
+  const bearer = await participantAuthHeaders();
+  const payload: Record<string, number> = {};
+  if (body?.league != null && Number.isFinite(body.league) && body.league > 0) {
+    payload.league = body.league;
+  }
+  if (body?.season != null && Number.isFinite(body.season) && body.season > 0) {
+    payload.season = body.season;
+  }
+  const r = await fetch(
+    `${apiBase()}/my-competitions/${encodeURIComponent(String(competitionId))}/import-api-football-fixtures`,
+    {
+      method: "POST",
+      headers: { ...jsonHeaders, ...bearer },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  return (await r.json()) as {
+    ok: boolean;
+    totalFromApi: number;
+    written: number;
+    league: number;
+    season: number;
+    message?: string;
+  };
+}
+
+/** Import squad (players + coaches) for one API-Football fixture into `fixture_squad_members` (server rules apply). */
+export async function myFetchFixtureSquad(competitionId: number | string, fixtureId: number) {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(
+    `${apiBase()}/my-competitions/${encodeURIComponent(String(competitionId))}/fetch-fixture-squad`,
+    {
+      method: "POST",
+      headers: { ...jsonHeaders, ...bearer },
+      body: JSON.stringify({ fixtureId }),
+    },
+  );
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  return (await r.json()) as { message: string };
 }
 
 export async function invitePreview(token: string) {

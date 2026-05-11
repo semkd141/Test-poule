@@ -4,22 +4,22 @@ import type { Env } from "../config/env.js";
 import type { SupabaseGateway } from "../services/supabase-gateway.js";
 import { HttpError } from "../shared/http-error.js";
 import { asyncHandler } from "../middleware/async-handler.js";
+import { canManageCompetition } from "../auth/can-manage-competition.js";
 import { isPlatformOperator } from "../auth/platform-operator.js";
 import { normEmail } from "../participant/participant-access.js";
 import { TransactionalEmailService } from "../services/transactional-email.js";
+import {
+  fetchAllFixturesFromApiFootball,
+  mapApiResponseToFixtureRows,
+} from "../services/api-football-fixture-mapper.js";
+import { syncFixtureSquadMembers } from "../services/fixture-squad-sync.service.js";
 import { z } from "zod";
+import { resolvedLeagueFields, defaultApiFootballSeasonForLeagueType } from "../league-type-resolve.js";
 
 function ownerSub(req: Request): string {
   const s = req.supabaseUser?.sub;
   if (!s || typeof s !== "string") throw new HttpError(401, "Not authenticated");
   return s.trim();
-}
-
-function canManageCompetition(req: Request, env: Env, row: Record<string, unknown>): boolean {
-  if (isPlatformOperator(req, env)) return true;
-  const uid = String(req.supabaseUser?.sub ?? "");
-  const o = row.owner_user_id;
-  return Boolean(uid && o != null && String(o) === uid);
 }
 
 const competitionCreateSchema = z.object({
@@ -28,6 +28,7 @@ const competitionCreateSchema = z.object({
     .min(2)
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "slug: lowercase letters, digits, hyphens only"),
   name: z.string().min(2),
+  league_type: z.string().min(1, "league_type is required"),
   season_label: z.preprocess((v) => (v === "" || v === undefined ? undefined : v), z.string().optional()),
   starts_at: z.preprocess((v) => (v === "" || v === undefined ? undefined : v), z.string().datetime().optional()),
   metadata: z.record(z.string(), z.unknown()).optional(),
@@ -40,6 +41,7 @@ const competitionPatchSchema = z.object({
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "slug: lowercase letters, digits, hyphens only")
     .optional(),
   name: z.string().min(2).optional(),
+  league_type: z.string().min(1).optional(),
   season_label: z.preprocess((v) => (v === "" ? null : v), z.string().nullable().optional()),
   starts_at: z.preprocess((v) => (v === "" ? null : v), z.string().datetime().nullable().optional()),
   metadata: z.record(z.string(), z.unknown()).optional(),
@@ -52,6 +54,7 @@ const competitionPutSchema = z.object({
     .min(2)
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "slug: lowercase letters, digits, hyphens only"),
   name: z.string().min(2),
+  league_type: z.string().min(1, "league_type is required"),
   season_label: z.preprocess(
     (v) => (v === "" || v === undefined ? null : v),
     z.union([z.string(), z.null()]),
@@ -73,6 +76,92 @@ const mappingPatchSchema = z.object({
 const invitePostSchema = z.object({
   email: z.string().email(),
 });
+
+const importApiFootballSchema = z.object({
+  league: z.coerce.number().int().positive().optional(),
+  season: z.coerce.number().int().positive().optional(),
+});
+
+const fetchFixtureSquadBodySchema = z.object({
+  fixtureId: z.coerce.number().int().positive(),
+});
+
+function resolveApiFootballLeagueSeason(
+  body: { league?: number | undefined; season?: number | undefined },
+  meta: unknown,
+  competitionRow: Record<string, unknown>,
+): { league: number; season: number } {
+  const bl = body.league;
+  const bs = body.season;
+  if (bl !== undefined && bs !== undefined) {
+    const league = Number(bl);
+    const season = Number(bs);
+    if (!Number.isFinite(league) || league <= 0 || !Number.isFinite(season) || season <= 0) {
+      throw new HttpError(400, "league and season must be positive integers");
+    }
+    return { league: Math.floor(league), season: Math.floor(season) };
+  }
+
+  let metaLeague: number | undefined;
+  let metaSeason: number | undefined;
+  if (meta && typeof meta === "object" && !Array.isArray(meta)) {
+    const af = (meta as Record<string, unknown>).api_football;
+    if (af && typeof af === "object" && !Array.isArray(af)) {
+      const o = af as Record<string, unknown>;
+      const l = Number(o.league);
+      const s = Number(o.season);
+      if (Number.isFinite(l) && l > 0) metaLeague = Math.floor(l);
+      if (Number.isFinite(s) && s > 0) metaSeason = Math.floor(s);
+    }
+  }
+
+  if (metaLeague !== undefined && metaSeason !== undefined) {
+    return { league: metaLeague, season: metaSeason };
+  }
+
+  const compLeague = Number(competitionRow.api_football_league_id);
+  const league =
+    metaLeague ??
+    (Number.isFinite(compLeague) && compLeague > 0 ? Math.floor(compLeague) : undefined);
+
+  const season =
+    metaSeason ??
+    (bs !== undefined
+      ? (() => {
+          const n = Number(bs);
+          return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
+        })()
+      : undefined);
+
+  if (league !== undefined && season !== undefined) {
+    return { league, season };
+  }
+
+  throw new HttpError(
+    400,
+    "Set api_football.season in pool metadata, pass season in the import body, or pass both league and season. The pool’s league type sets the default API-Football league id.",
+  );
+}
+
+function ensureMetadataApiFootballLeagueSeason(
+  existing: unknown,
+  league: number,
+  season: number,
+): Record<string, unknown> {
+  const base =
+    existing && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+  const prevAf = base.api_football;
+  const af =
+    prevAf && typeof prevAf === "object" && !Array.isArray(prevAf)
+      ? { ...(prevAf as Record<string, unknown>) }
+      : {};
+  af.league = league;
+  af.season = season;
+  base.api_football = af;
+  return base;
+}
 
 async function requesterEmail(req: Request, gateway: SupabaseGateway): Promise<string | null> {
   const j = req.supabaseUser?.email;
@@ -115,11 +204,22 @@ export function createCompetitionOwnerRouter(gateway: SupabaseGateway, env: Env)
       const sub = ownerSub(req);
       const parsed = competitionCreateSchema.safeParse(req.body);
       if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
-      const body = {
-        ...parsed.data,
+      const leagueFields = await resolvedLeagueFields(gateway, parsed.data.league_type);
+      const meta = ensureMetadataApiFootballLeagueSeason(
+        parsed.data.metadata,
+        leagueFields.api_football_league_id,
+        defaultApiFootballSeasonForLeagueType(leagueFields.league_type),
+      );
+      const body: Record<string, unknown> = {
         slug: parsed.data.slug.trim().toLowerCase(),
+        name: parsed.data.name,
+        league_type: leagueFields.league_type,
+        api_football_league_id: leagueFields.api_football_league_id,
         owner_user_id: sub,
+        metadata: meta,
       };
+      if (parsed.data.season_label !== undefined) body.season_label = parsed.data.season_label;
+      if (parsed.data.starts_at !== undefined) body.starts_at = parsed.data.starts_at;
       const out = await gateway.createCompetition(body);
       res.status(201).json(out);
     }),
@@ -140,6 +240,130 @@ export function createCompetitionOwnerRouter(gateway: SupabaseGateway, env: Env)
     }),
   );
 
+  router.post(
+    "/:competitionId/import-api-football-fixtures",
+    asyncHandler(async (req, res) => {
+      const id = String(req.params.competitionId ?? "").trim();
+      if (!id) throw new HttpError(400, "competition id required");
+      const row = await gateway.getCompetitionById(id);
+      if (!row) throw new HttpError(404, "Competition not found");
+      if (!canManageCompetition(req, env, row)) throw new HttpError(403, "Forbidden");
+      const competitionId = Number(row.id);
+      if (!Number.isFinite(competitionId)) throw new HttpError(500, "Invalid competition id");
+
+      const parsed = importApiFootballSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
+      }
+
+      const { league, season } = resolveApiFootballLeagueSeason(parsed.data, row.metadata, row);
+
+      const already = await gateway.fixtureMappingsExistForLeagueSeason(league, season);
+      if (already) {
+        await gateway.patchCompetition(String(competitionId), {
+          metadata: ensureMetadataApiFootballLeagueSeason(row.metadata, league, season),
+        });
+        res.json({
+          ok: true,
+          source: "existing_league_season",
+          totalFromApi: 0,
+          written: 0,
+          league,
+          season,
+          message:
+            "Fixture mappings already exist for this API-Football league and season (shared across pools). Metadata updated; no API call.",
+        });
+        return;
+      }
+
+      if (!env.API_FOOTBALL_KEY || env.API_FOOTBALL_KEY.length < 8) {
+        throw new HttpError(
+          503,
+          "No other pool has this league/season with fixtures yet, and API_FOOTBALL_KEY is not configured. Add a pool with imported fixtures or set API_FOOTBALL_KEY.",
+        );
+      }
+
+      let items;
+      try {
+        items = await fetchAllFixturesFromApiFootball({
+          apiKey: env.API_FOOTBALL_KEY,
+          league,
+          season,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new HttpError(502, `API-Football request failed: ${msg}`);
+      }
+
+      const mappings = mapApiResponseToFixtureRows(items, league, season);
+      if (mappings.length === 0) {
+        res.json({
+          ok: true,
+          source: "api_football",
+          totalFromApi: items.length,
+          written: 0,
+          league,
+          season,
+          message:
+            items.length === 0
+              ? "API returned no fixtures for this league/season."
+              : "No fixtures with valid API ids to import.",
+        });
+        return;
+      }
+
+      await gateway.upsertFixtureMappingsBatch(mappings);
+      await gateway.patchCompetition(String(competitionId), {
+        metadata: ensureMetadataApiFootballLeagueSeason(row.metadata, league, season),
+      });
+      res.json({
+        ok: true,
+        source: "api_football",
+        totalFromApi: items.length,
+        written: mappings.length,
+        league,
+        season,
+      });
+    }),
+  );
+
+  /** Store API-Football squad (players + coaches) for one fixture; pool owner only; fixture must belong to this pool’s mappings. */
+  router.post(
+    "/:competitionId/fetch-fixture-squad",
+    asyncHandler(async (req, res) => {
+      const cid = String(req.params.competitionId ?? "").trim();
+      if (!cid) throw new HttpError(400, "competition id required");
+      const comp = await gateway.getCompetitionById(cid);
+      if (!comp) throw new HttpError(404, "Competition not found");
+      if (!canManageCompetition(req, env, comp)) throw new HttpError(403, "Forbidden");
+
+      const parsed = fetchFixtureSquadBodySchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
+      }
+      const fixtureId = parsed.data.fixtureId;
+
+      const competitionId = Number(comp.id);
+      if (!Number.isFinite(competitionId)) throw new HttpError(500, "Invalid competition id");
+
+      const mapsRaw = await gateway.listFixtureMappings(competitionId);
+      const maps = Array.isArray(mapsRaw) ? mapsRaw : [];
+      const allowed = maps.some((m) => {
+        if (!m || typeof m !== "object" || Array.isArray(m)) return false;
+        return Number((m as Record<string, unknown>).api_fixture_id) === fixtureId;
+      });
+      if (!allowed) {
+        throw new HttpError(
+          400,
+          "This fixture id is not linked in this pool’s fixture mappings (set the API fixture id on the row first).",
+        );
+      }
+
+      const out = await syncFixtureSquadMembers(fixtureId, gateway, env);
+      res.json(out);
+    }),
+  );
+
   router.patch(
     "/:competitionId/fixture-mappings/:mappingId",
     asyncHandler(async (req, res) => {
@@ -149,10 +373,16 @@ export function createCompetitionOwnerRouter(gateway: SupabaseGateway, env: Env)
       const comp = await gateway.getCompetitionById(cid);
       if (!comp) throw new HttpError(404, "Competition not found");
       if (!canManageCompetition(req, env, comp)) throw new HttpError(403, "Forbidden");
-      const compNum = Number(comp.id);
       const mapRow = await gateway.getFixtureMappingById(mid);
       if (!mapRow) throw new HttpError(404, "Fixture mapping not found");
-      if (Number(mapRow.competition_id) !== compNum) throw new HttpError(400, "Mapping does not belong to this competition");
+      const scope = gateway.getFixtureMappingScopeForCompetition(comp as Record<string, unknown>);
+      if (!scope) throw new HttpError(400, "Pool has no API-Football league/season for fixture mappings");
+      if (
+        Number(mapRow.api_football_league_id) !== scope.leagueId ||
+        Number(mapRow.season) !== scope.season
+      ) {
+        throw new HttpError(400, "Mapping does not match this pool's league and season");
+      }
       const parsed = mappingPatchSchema.safeParse(req.body);
       if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
       const out = await gateway.patchFixtureMapping(mid, parsed.data);
@@ -267,8 +497,12 @@ export function createCompetitionOwnerRouter(gateway: SupabaseGateway, env: Env)
       if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
       const bodyRaw = parsed.data;
       if (!Object.keys(bodyRaw).length) throw new HttpError(400, "No fields to update");
-      const body =
-        bodyRaw.slug !== undefined ? { ...bodyRaw, slug: bodyRaw.slug.trim().toLowerCase() } : bodyRaw;
+      let body: Record<string, unknown> =
+        bodyRaw.slug !== undefined ? { ...bodyRaw, slug: bodyRaw.slug.trim().toLowerCase() } : { ...bodyRaw };
+      if (bodyRaw.league_type !== undefined) {
+        const lf = await resolvedLeagueFields(gateway, String(bodyRaw.league_type));
+        body = { ...body, ...lf };
+      }
       const out = await gateway.patchCompetition(id, body);
       res.json(out);
     }),
@@ -284,8 +518,10 @@ export function createCompetitionOwnerRouter(gateway: SupabaseGateway, env: Env)
       if (!canManageCompetition(req, env, existing)) throw new HttpError(403, "Forbidden");
       const parsed = competitionPutSchema.safeParse(req.body);
       if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
+      const leagueFields = await resolvedLeagueFields(gateway, parsed.data.league_type);
       const body = {
         ...parsed.data,
+        ...leagueFields,
         slug: parsed.data.slug.trim().toLowerCase(),
       };
       const out = await gateway.patchCompetition(id, body);

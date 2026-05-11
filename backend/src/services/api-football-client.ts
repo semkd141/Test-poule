@@ -41,4 +41,18 @@ export class ApiFootballClient {
     const rows = await this.get<ApiFootballFixture>("/fixtures", { id: fixtureId });
     return rows[0] ?? null;
   }
+
+  /** Full `/fixtures` row (includes `players` when API returns them — often only for some competitions). */
+  async getFixtureResponseItemById(fixtureId: number): Promise<unknown | null> {
+    const rows = await this.get<unknown>("/fixtures", { id: fixtureId });
+    return rows[0] ?? null;
+  }
+
+  /**
+   * Squad + per-player stats for a fixture (UEFA leagues, etc. often omit `players` on `/fixtures`).
+   * https://www.api-football.com/documentation-v3#tag/Fixtures/operation/get-fixtures-players
+   */
+  async getFixturePlayerGroupsByFixtureId(fixtureId: number): Promise<unknown[]> {
+    return this.get<unknown>("/fixtures/players", { fixture: fixtureId });
+  }
 }
