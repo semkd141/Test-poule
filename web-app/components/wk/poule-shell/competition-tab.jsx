@@ -10,12 +10,14 @@ import {
   myDeleteMyCompetition,
   myListCompetitionParticipants,
   myListCompetitionFixtureMappings,
-  myPatchCompetitionFixtureMapping,
   myPatchMyCompetition,
   mySendCompetitionInvite,
   myListCompetitionInvites,
+  myImportApiFootballFixtures,
+  myFetchFixtureSquad,
+  listLeagueTypes,
 } from "../../../lib/wk/api-client";
-import { toastError, toastWarning } from "../../../lib/wk/toast";
+import { toastError, toastSuccess, toastWarning } from "../../../lib/wk/toast";
 
 function isoToDatetimeLocal(iso) {
   if (!iso || typeof iso !== "string") return "";
@@ -44,22 +46,26 @@ export function CompetitionTab() {
   const [loadingSession, setLoadingSession] = useState(true);
   const [competitions, setCompetitions] = useState([]);
   const [busy, setBusy] = useState(false);
-  const [newPool, setNewPool] = useState({ slug: "", name: "", season_label: "", starts_at: "" });
+  const [leagueTypes, setLeagueTypes] = useState([]);
+  const [newPool, setNewPool] = useState({ slug: "", name: "", league_type: "", season_label: "", starts_at: "" });
   const [selectedId, setSelectedId] = useState("");
   const [participants, setParticipants] = useState([]);
   const [fixtureMappings, setFixtureMappings] = useState([]);
-  const [mappingBusyId, setMappingBusyId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [editForm, setEditForm] = useState({
     name: "",
     slug: "",
+    league_type: "",
     season_label: "",
     starts_at: "",
-    metadataJson: "{}",
   });
   const [editSaved, setEditSaved] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRows, setInviteRows] = useState([]);
+  const [importLeague, setImportLeague] = useState("1");
+  const [importSeason, setImportSeason] = useState("2022");
+  const [importBusy, setImportBusy] = useState(false);
+  const [fetchingSquadFixtureId, setFetchingSquadFixtureId] = useState(null);
 
   const refreshSession = useCallback(async function() {
     setLoadingSession(true);
@@ -76,6 +82,16 @@ export function CompetitionTab() {
   useEffect(function() {
     refreshSession();
   }, [refreshSession]);
+
+  useEffect(function() {
+    listLeagueTypes()
+      .then(function(rows) {
+        setLeagueTypes(Array.isArray(rows) ? rows : []);
+      })
+      .catch(function() {
+        setLeagueTypes([]);
+      });
+  }, []);
 
   const loadCompetitions = useCallback(async function() {
     if (!session) return;
@@ -141,21 +157,16 @@ export function CompetitionTab() {
   useEffect(
     function() {
       if (!selected) return;
-      var metaStr = "{}";
-      try {
-        var m = selected.metadata;
-        metaStr = JSON.stringify(m && typeof m === "object" && !Array.isArray(m) ? m : {}, null, 2);
-      } catch {
-        metaStr = "{}";
-      }
       setEditForm({
         name: String(selected.name ?? ""),
         slug: String(selected.slug ?? ""),
+        league_type: selected.league_type != null && String(selected.league_type).trim()
+          ? String(selected.league_type).trim()
+          : "",
         season_label: selected.season_label != null && selected.season_label !== undefined
           ? String(selected.season_label)
           : "",
         starts_at: isoToDatetimeLocal(selected.starts_at),
-        metadataJson: metaStr,
       });
       setEditSaved(false);
     },
@@ -168,25 +179,15 @@ export function CompetitionTab() {
       toastError(tc.slugNameRequired || "Slug and name are required.");
       return;
     }
-    var meta = {};
-    try {
-      meta = editForm.metadataJson.trim() ? JSON.parse(editForm.metadataJson) : {};
-      if (typeof meta !== "object" || meta === null || Array.isArray(meta)) {
-        throw new Error("object");
-      }
-    } catch {
-      toastError(tc.metadataInvalid || "Metadata must be a JSON object.");
-      return;
-    }
     setBusy(true);
     try {
-      await myPatchMyCompetition(selectedId, {
+      var patchBody = {
         slug: editForm.slug.trim().toLowerCase().replace(/\s+/g, "-"),
         name: editForm.name.trim(),
         season_label: editForm.season_label.trim() || null,
         starts_at: editForm.starts_at ? new Date(editForm.starts_at).toISOString() : null,
-        metadata: meta,
-      });
+      };
+      await myPatchMyCompetition(selectedId, patchBody);
       setEditSaved(true);
       setTimeout(function() {
         setEditSaved(false);
@@ -216,16 +217,23 @@ export function CompetitionTab() {
       toastError(tc.slugNameRequired || "Slug and name are required.");
       return;
     }
+    if (!newPool.league_type || !String(newPool.league_type).trim()) {
+      toastError(tc.leagueTypeRequired || "Choose a competition type.");
+      return;
+    }
     setBusy(true);
     try {
-      await myCreateCompetition({
+      const raw = await myCreateCompetition({
         slug: newPool.slug.trim().toLowerCase().replace(/\s+/g, "-"),
         name: newPool.name.trim(),
+        league_type: String(newPool.league_type).trim(),
         season_label: newPool.season_label.trim() || undefined,
         starts_at: newPool.starts_at ? new Date(newPool.starts_at).toISOString() : undefined,
       });
-      setNewPool({ slug: "", name: "", season_label: "", starts_at: "" });
+      setNewPool({ slug: "", name: "", league_type: "", season_label: "", starts_at: "" });
       await loadCompetitions();
+      var created = Array.isArray(raw) ? raw[0] : raw;
+      if (created && created.id != null) setSelectedId(String(created.id));
     } catch (e) {
       toastError((tc.createFailed || "Could not create pool") + ": " + (e.message || ""));
     } finally {
@@ -276,31 +284,68 @@ export function CompetitionTab() {
     }
   }
 
-  async function saveFixtureMapping(row, valueRaw) {
-    const val = String(valueRaw ?? "").trim();
-    const nextId = val ? Number(val) : null;
-    if (nextId !== null && (!Number.isInteger(nextId) || nextId <= 0)) {
+  useEffect(
+    function() {
+      if (!selected) return;
+      var lid = selected.api_football_league_id;
+      if (lid != null && lid !== "" && Number.isFinite(Number(lid)) && Number(lid) > 0) {
+        setImportLeague(String(Math.floor(Number(lid))));
+      }
+    },
+    [selected],
+  );
+
+  async function importFixturesFromApi() {
+    if (!selectedId) return;
+    var leagueNum = parseInt(String(importLeague).trim(), 10);
+    var seasonNum = parseInt(String(importSeason).trim(), 10);
+    var body = {};
+    if (Number.isFinite(leagueNum) && leagueNum > 0 && Number.isFinite(seasonNum) && seasonNum > 0) {
+      body = { league: leagueNum, season: seasonNum };
+    } else if (Number.isFinite(seasonNum) && seasonNum > 0) {
+      body = { season: seasonNum };
+    }
+    setImportBusy(true);
+    try {
+      var result = await myImportApiFootballFixtures(selectedId, body);
+      var maps = await myListCompetitionFixtureMappings(selectedId);
+      setFixtureMappings(Array.isArray(maps) ? maps : []);
+      if (result.written > 0) {
+        var msg = (tc.importFixturesSuccess || "Saved {n} fixtures ({total} from API).")
+          .replace("{n}", String(result.written))
+          .replace("{total}", String(result.totalFromApi));
+        toastSuccess(msg);
+      } else {
+        toastWarning(
+          tc.importFixturesNone || "No rows imported.",
+          result.message ? { description: result.message } : undefined,
+        );
+      }
+    } catch (e) {
+      toastError((tc.importFixturesTitle || "Import failed") + ": " + (e.message || ""));
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
+  async function fetchFixtureSquadForRow(apiFixtureId) {
+    if (!selectedId || apiFixtureId == null || apiFixtureId === "") {
+      toastWarning(tc.fetchFixtureSquadNoId || "Set an API fixture id on this row first.");
+      return;
+    }
+    var fid = Number(apiFixtureId);
+    if (!Number.isFinite(fid) || fid <= 0) {
       toastError(tc.fixtureIdPositive || "Fixture id must be a positive integer.");
       return;
     }
-    if (nextId !== null) {
-      const dup = fixtureMappings.find(function(x) {
-        return Number(x.id) !== Number(row.id) && Number(x.api_fixture_id || 0) === nextId;
-      });
-      if (dup) {
-        toastError(tc.fixtureDup || "That API fixture id is already used in this pool.");
-        return;
-      }
-    }
-    setMappingBusyId(row.id);
+    setFetchingSquadFixtureId(String(fid));
     try {
-      await myPatchCompetitionFixtureMapping(selectedId, row.id, nextId);
-      const maps = await myListCompetitionFixtureMappings(selectedId);
-      setFixtureMappings(Array.isArray(maps) ? maps : []);
+      var out = await myFetchFixtureSquad(selectedId, fid);
+      toastSuccess(out.message || tc.fetchFixtureSquadSuccess || "players with this fixture fetched");
     } catch (e) {
-      toastError((tc.mappingFailed || "Mapping update failed") + ": " + (e.message || ""));
+      toastError((tc.fetchFixtureSquadFailed || "Could not fetch squad") + ": " + (e.message || ""));
     } finally {
-      setMappingBusyId(null);
+      setFetchingSquadFixtureId(null);
     }
   }
 
@@ -323,6 +368,18 @@ export function CompetitionTab() {
         </button>
       </div>
     );
+  }
+
+  var ltForDisplay =
+    editForm.league_type != null && String(editForm.league_type).trim()
+      ? String(editForm.league_type).trim()
+      : "";
+  var leagueTypeEditDisplay = "";
+  if (ltForDisplay) {
+    var lo = leagueTypes.find(function(o) {
+      return o.league_type === ltForDisplay;
+    });
+    leagueTypeEditDisplay = lo ? ltForDisplay + " (API league " + lo.league_id + ")" : ltForDisplay;
   }
 
   return (
@@ -358,6 +415,24 @@ export function CompetitionTab() {
             onChange={function(e) { setNewPool(Object.assign({}, newPool, { name: e.target.value })); }}
             style={{ margin: 0 }}
           />
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "var(--fg-muted)", margin: 0 }}>
+            {/* {tc.leagueTypeLabel || "Competition type"} */}
+            <select
+              required
+              value={newPool.league_type}
+              onChange={function(e) { setNewPool(Object.assign({}, newPool, { league_type: e.target.value })); }}
+              style={{ margin: 0, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-2)", color: "var(--fg)" }}
+            >
+              <option value="">{tc.leagueTypePlaceholder || "— choose —"}</option>
+              {leagueTypes.map(function(opt) {
+                return (
+                  <option key={opt.league_type} value={opt.league_type}>
+                    {opt.league_type} (API league {opt.league_id})
+                  </option>
+                );
+              })}
+            </select>
+          </label>
           <input
             placeholder={tc.seasonPh || "season (optional)"}
             value={newPool.season_label}
@@ -444,6 +519,7 @@ export function CompetitionTab() {
             }}
           >
             <input
+              readOnly
               placeholder={tc.slugPh || "slug"}
               value={editForm.slug}
               onChange={function(e) {
@@ -460,6 +536,15 @@ export function CompetitionTab() {
               style={{ margin: 0 }}
             />
             <input
+              readOnly
+              value={leagueTypeEditDisplay}
+              placeholder={tc.leagueTypePlaceholder || "— choose type —"}
+              title={tc.leagueTypeReadonlyHint || "Competition type cannot be changed after the pool is created."}
+              aria-label={tc.leagueTypeLabel || "Competition type"}
+              style={{ margin: 0, cursor: "default" }}
+            />
+            <input
+              readOnly
               placeholder={tc.seasonPh || "season (optional)"}
               value={editForm.season_label}
               onChange={function(e) {
@@ -475,30 +560,6 @@ export function CompetitionTab() {
               }}
               style={{ margin: 0 }}
             />
-          </div>
-          <div style={{ marginBottom: 10 }}>
-            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--fg-muted)" }}>
-              {tc.metadataLabel || "Metadata (JSON)"}
-            </label>
-            <textarea
-              rows={4}
-              value={editForm.metadataJson}
-              onChange={function(e) {
-                setEditForm(Object.assign({}, editForm, { metadataJson: e.target.value }));
-              }}
-              style={{
-                margin: 0,
-                width: "100%",
-                maxWidth: "100%",
-                boxSizing: "border-box",
-                fontFamily: "ui-monospace, monospace",
-                fontSize: 12,
-              }}
-              spellCheck={false}
-            />
-            <div style={{ fontSize: 11, color: "var(--fg-muted)", marginTop: 4 }}>
-              {tc.metadataHint || "Optional JSON object."}
-            </div>
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 16 }}>
             <button type="button" className="btn" onClick={savePoolEdits} disabled={busy}>
@@ -524,6 +585,51 @@ export function CompetitionTab() {
             </div>
             <div style={{ marginTop: 4 }}>
               {tc.teamsLabel || "Teams registered"}: {participants.length}
+            </div>
+          </div>
+
+          <div style={{ marginTop: 16, marginBottom: 14 }}>
+            <div style={{ fontFamily: "var(--wk-heading-font)", fontSize: 14, marginBottom: 8, color: "var(--orange)" }}>
+              {tc.importFixturesTitle || "Import fixtures (API-Football)"}
+            </div>
+            <p style={{ fontSize: 12, color: "var(--fg-muted)", marginBottom: 10, lineHeight: 1.45 }}>
+              {tc.importFixturesHint ||
+                "Fetch fixtures from API-Football and save as mappings. Server needs API_FOOTBALL_KEY."}
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 10 }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "var(--fg-muted)" }}>
+                {tc.importFixturesLeagueLabel || "League id"}
+                <input
+                  type="number"
+                  min="1"
+                  value={importLeague}
+                  onChange={function(e) {
+                    setImportLeague(e.target.value);
+                  }}
+                  style={{ margin: 0, width: 120 }}
+                />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "var(--fg-muted)" }}>
+                {tc.importFixturesSeasonLabel || "Season"}
+                <input
+                  type="number"
+                  min="1900"
+                  value={importSeason}
+                  onChange={function(e) {
+                    setImportSeason(e.target.value);
+                  }}
+                  style={{ margin: 0, width: 120 }}
+                />
+              </label>
+              <button
+                type="button"
+                className="btn"
+                style={{ alignSelf: "flex-end", marginTop: 16 }}
+                disabled={busy || importBusy}
+                onClick={importFixturesFromApi}
+              >
+                {importBusy ? (tc.importFixturesBusy || "…") : (tc.importFixturesButton || "Import")}
+              </button>
             </div>
           </div>
 
@@ -589,12 +695,18 @@ export function CompetitionTab() {
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 280, overflow: "auto" }}>
                 {fixtureMappings.map(function(m) {
+                  var hasFx =
+                    m.api_fixture_id != null &&
+                    m.api_fixture_id !== "" &&
+                    Number.isFinite(Number(m.api_fixture_id)) &&
+                    Number(m.api_fixture_id) > 0;
+                  var busyThis = fetchingSquadFixtureId === String(m.api_fixture_id);
                   return (
                     <div
                       key={m.id}
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "120px 72px 1fr auto",
+                        gridTemplateColumns: "minmax(0, 100px) 64px minmax(0, 1fr) auto",
                         gap: 8,
                         alignItems: "center",
                         fontSize: 12,
@@ -604,29 +716,29 @@ export function CompetitionTab() {
                         borderRadius: 8,
                       }}
                     >
-                      <code>{m.local_key}</code>
+                      <code style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{m.local_key}</code>
                       <span style={{ color: "var(--fg-muted)" }}>{m.stage}</span>
-                      <input
-                        type="number"
-                        min="1"
-                        placeholder="api_fixture_id"
-                        defaultValue={m.api_fixture_id ?? ""}
-                        id={"owner-fixture-input-" + m.id}
-                        key={m.id + "-" + (m.api_fixture_id ?? "")}
-                        style={{ margin: 0 }}
-                      />
+                      <code style={{ margin: 0, color: "var(--fg)", opacity: hasFx ? 1 : 0.5, minWidth: 0 }}>
+                        {hasFx ? String(m.api_fixture_id) : "—"}
+                      </code>
                       <button
                         type="button"
-                        className="btn"
-                        style={{ padding: "4px 10px", fontSize: 12 }}
-                        disabled={mappingBusyId === m.id}
+                        className="btn btn-outline"
+                        style={{ padding: "4px 8px", fontSize: 11, whiteSpace: "nowrap" }}
+                        disabled={!hasFx || busyThis || Boolean(fetchingSquadFixtureId)}
+                        title={
+                          hasFx
+                            ? tc.fetchFixtureSquadHint ||
+                              "Load players and coaches for this match from API-Football (once per fixture id)."
+                            : tc.fetchFixtureSquadNoId || "Set an API fixture id on this row first."
+                        }
                         onClick={function() {
-                          var el = document.getElementById("owner-fixture-input-" + m.id);
-                          var v = el && "value" in el ? el.value : "";
-                          saveFixtureMapping(m, v);
+                          fetchFixtureSquadForRow(m.api_fixture_id);
                         }}
                       >
-                        {mappingBusyId === m.id ? "…" : tc.saveMap || "Save"}
+                        {busyThis
+                          ? tc.fetchFixtureSquadBusy || "…"
+                          : tc.fetchFixtureSquadButton || "Fetch players"}
                       </button>
                     </div>
                   );

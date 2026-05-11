@@ -11,7 +11,7 @@ import {
   adminCreateCompetition,
   adminDeleteCompetition,
   adminListFixtureMappings,
-  adminUpdateFixtureMapping,
+  listLeagueTypes,
 } from "../../../../lib/wk/api-client";
 import { toastError } from "../../../../lib/wk/toast";
 import { AdminRow } from "./admin-row.jsx";
@@ -29,15 +29,16 @@ export function AdminTab() {
   const [deadlineSaved, setDeadlineSaved] = useState(false);
   const [competitions, setCompetitions] = useState([]);
   const [competitionBusy, setCompetitionBusy] = useState(false);
+  const [leagueTypes, setLeagueTypes] = useState([]);
   const [newCompetition, setNewCompetition] = useState({
     slug: "",
     name: "",
+    league_type: "",
     season_label: "",
     starts_at: "",
   });
   const [selectedCompetitionId, setSelectedCompetitionId] = useState("");
   const [fixtureMappings, setFixtureMappings] = useState([]);
-  const [mappingBusyId, setMappingBusyId] = useState(null);
 
   // Initialize deadline editor with current config
   useEffect(function() {
@@ -61,6 +62,16 @@ export function AdminTab() {
 
   useEffect(function() {
     loadCompetitions();
+  }, []);
+
+  useEffect(function() {
+    listLeagueTypes()
+      .then(function(rows) {
+        setLeagueTypes(Array.isArray(rows) ? rows : []);
+      })
+      .catch(function() {
+        setLeagueTypes([]);
+      });
   }, []);
 
   useEffect(function() {
@@ -140,15 +151,20 @@ export function AdminTab() {
       toastError("Slug and name are required.");
       return;
     }
+    if (!newCompetition.league_type || !String(newCompetition.league_type).trim()) {
+      toastError("Choose a competition type.");
+      return;
+    }
     setCompetitionBusy(true);
     try {
       await adminCreateCompetition({
-        slug: newCompetition.slug.trim(),
+        slug: newCompetition.slug.trim().toLowerCase(),
         name: newCompetition.name.trim(),
+        league_type: String(newCompetition.league_type).trim(),
         season_label: newCompetition.season_label.trim() || undefined,
         starts_at: newCompetition.starts_at ? new Date(newCompetition.starts_at).toISOString() : undefined,
       });
-      setNewCompetition({ slug: "", name: "", season_label: "", starts_at: "" });
+      setNewCompetition({ slug: "", name: "", league_type: "", season_label: "", starts_at: "" });
       await loadCompetitions();
     } catch (e) {
       toastError("Create competition failed: " + (e.message || "unknown"));
@@ -169,34 +185,6 @@ export function AdminTab() {
       toastError("Delete competition failed: " + (e.message || "unknown"));
     } finally {
       setCompetitionBusy(false);
-    }
-  }
-
-  async function saveFixtureMapping(row, valueRaw) {
-    const val = String(valueRaw ?? "").trim();
-    const nextId = val ? Number(val) : null;
-    if (nextId !== null && (!Number.isInteger(nextId) || nextId <= 0)) {
-      toastError("api_fixture_id must be a positive integer.");
-      return;
-    }
-    if (nextId !== null) {
-      const dup = fixtureMappings.find(function(x) {
-        return Number(x.id) !== Number(row.id) && Number(x.api_fixture_id || 0) === nextId;
-      });
-      if (dup) {
-        toastError("This fixture id is already mapped to another local key in this competition.");
-        return;
-      }
-    }
-    setMappingBusyId(row.id);
-    try {
-      await adminUpdateFixtureMapping(row.id, nextId);
-      const rows = await adminListFixtureMappings(selectedCompetitionId);
-      setFixtureMappings(rows);
-    } catch (e) {
-      toastError("Update mapping failed: " + (e.message || "unknown"));
-    } finally {
-      setMappingBusyId(null);
     }
   }
 
@@ -285,6 +273,20 @@ export function AdminTab() {
               onChange={function(e){ setNewCompetition(Object.assign({}, newCompetition, { name: e.target.value })); }}
               style={{margin:0}}
             />
+            <select
+              value={newCompetition.league_type}
+              onChange={function(e){ setNewCompetition(Object.assign({}, newCompetition, { league_type: e.target.value })); }}
+              style={{margin:0,padding:"8px 10px",borderRadius:8,border:"1px solid var(--border)",background:"var(--bg-2)",color:"var(--fg)"}}
+            >
+              <option value="">— competition type —</option>
+              {leagueTypes.map(function(opt) {
+                return (
+                  <option key={opt.league_type} value={opt.league_type}>
+                    {opt.league_type} (API {opt.league_id})
+                  </option>
+                );
+              })}
+            </select>
             <input
               placeholder="season label (optional)"
               value={newCompetition.season_label}
@@ -343,37 +345,12 @@ export function AdminTab() {
               <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:320,overflow:"auto"}}>
                 {fixtureMappings.map(function(m) {
                   return (
-                    <div key={m.id} style={{display:"grid",gridTemplateColumns:"140px 80px 1fr auto auto",gap:8,alignItems:"center",fontSize:12,padding:"6px 8px",background:"var(--bg-2)",border:"1px solid var(--border)",borderRadius:8}}>
+                    <div key={m.id} style={{display:"grid",gridTemplateColumns:"140px 80px 1fr",gap:8,alignItems:"center",fontSize:12,padding:"6px 8px",background:"var(--bg-2)",border:"1px solid var(--border)",borderRadius:8}}>
                       <code>{m.local_key}</code>
                       <span style={{color:"var(--fg-muted)"}}>{m.stage}</span>
-                      <input
-                        type="number"
-                        min="1"
-                        placeholder="api_fixture_id"
-                        defaultValue={m.api_fixture_id ?? ""}
-                        id={"fixture-input-" + m.id}
-                        style={{margin:0}}
-                      />
-                      <button
-                        className="btn"
-                        style={{padding:"4px 10px",fontSize:12}}
-                        disabled={mappingBusyId === m.id}
-                        onClick={function(){
-                          var el = document.getElementById("fixture-input-" + m.id);
-                          var v = el && "value" in el ? el.value : "";
-                          saveFixtureMapping(m, v);
-                        }}
-                      >
-                        {mappingBusyId === m.id ? "…" : "Save"}
-                      </button>
-                      <button
-                        className="btn btn-outline"
-                        style={{padding:"4px 10px",fontSize:12}}
-                        disabled={mappingBusyId === m.id}
-                        onClick={function(){ saveFixtureMapping(m, ""); }}
-                      >
-                        Clear
-                      </button>
+                      <code style={{margin:0,color:"var(--fg)",opacity:m.api_fixture_id != null ? 1 : 0.5}}>
+                        {m.api_fixture_id != null && m.api_fixture_id !== "" ? String(m.api_fixture_id) : "—"}
+                      </code>
                     </div>
                   );
                 })}

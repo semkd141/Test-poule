@@ -7,7 +7,7 @@ import {
   authGetValidSession,
   dbToevoegen,
   joinCompetition,
-  listPublicCompetitions,
+  listMyRegisterableCompetitions,
   persistSupabaseSessionToWkStorage,
   readSelectedCompetition,
   writeSelectedCompetition,
@@ -18,7 +18,7 @@ import { CaptainBand } from "./teams/captain-band.jsx";
 import { CountryPicker } from "./country-picker.jsx";
 
 export function RegisterTab() {
-  const { t, config, reloadParticipants, wkSpelers, inviteRegistration, clearInviteRegistration } = useApp();
+  const { t, config, reloadParticipants, wkSpelers, inviteRegistration, clearInviteRegistration, setTab } = useApp();
   const [form, setForm] = useState({ naam:"", teamnaam:"", email:"", systeem:"4-3-3" });
   const [spelers, setSpelers] = useState({ keeper:[null], def:[null,null,null,null], mid:[null,null,null], att:[null,null,null], coach:[null] });
   const [captain, setCaptain] = useState(null); // { pos, index } — which slot is captain
@@ -35,6 +35,7 @@ export function RegisterTab() {
   const [step, setStep] = useState(registeringForInvite ? 1 : 0);
   const [publicComps, setPublicComps] = useState([]);
   const [compsLoading, setCompsLoading] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
   const [compSelectId, setCompSelectId] = useState("");
 
   useEffect(
@@ -89,14 +90,37 @@ export function RegisterTab() {
       if (registeringForInvite) return;
       var cancelled = false;
       setCompsLoading(true);
-      listPublicCompetitions().then(function(rows) {
-        if (cancelled) return;
-        setPublicComps(Array.isArray(rows) ? rows : []);
-        var st = readSelectedCompetition();
-        if (st && st.id) setCompSelectId(String(st.id));
-      }).finally(function() {
-        if (!cancelled) setCompsLoading(false);
-      });
+      authGetValidSession()
+        .then(function(sess) {
+          if (cancelled) return;
+          if (!sess || !sess.access_token) {
+            setSignedIn(false);
+            setPublicComps([]);
+            setCompsLoading(false);
+            return;
+          }
+          setSignedIn(true);
+          return listMyRegisterableCompetitions()
+            .then(function(rows) {
+              if (cancelled) return;
+              setPublicComps(Array.isArray(rows) ? rows : []);
+              var st = readSelectedCompetition();
+              if (st && st.id) setCompSelectId(String(st.id));
+            })
+            .catch(function() {
+              if (!cancelled) setPublicComps([]);
+            })
+            .finally(function() {
+              if (!cancelled) setCompsLoading(false);
+            });
+        })
+        .catch(function() {
+          if (!cancelled) {
+            setSignedIn(false);
+            setPublicComps([]);
+            setCompsLoading(false);
+          }
+        });
       return function() {
         cancelled = true;
       };
@@ -185,6 +209,27 @@ export function RegisterTab() {
       return Date.now() > config.deadline.getTime();
     },
     [registeringForInvite, config.deadline, step, compSelectId, publicComps],
+  );
+
+  /** Drop pre-selected / session pool if it is one you own (not in registerable list). */
+  useEffect(
+    function() {
+      if (registeringForInvite) return;
+      if (compsLoading || !signedIn) return;
+      if (step < 1) return;
+      var sel = readSelectedCompetition();
+      if (!sel || sel.id == null || sel.id === "") return;
+      var cid = Number(sel.id);
+      if (!Number.isFinite(cid) || cid <= 0) return;
+      var ok = publicComps.some(function(c) {
+        return Number(c.id) === cid;
+      });
+      if (ok) return;
+      setStep(0);
+      setCompSelectId("");
+      setError(t.registerOnlyNonOwnedPools || "");
+    },
+    [registeringForInvite, signedIn, compsLoading, step, publicComps, t],
   );
 
   // Index wk_spelers by land+positie for fast lookup
@@ -404,6 +449,12 @@ export function RegisterTab() {
       var syncRow = publicComps.find(function(c) {
         return Number(c.id) === Number(dupCompId);
       });
+      var inRegisterable = publicComps.some(function(c) {
+        return Number(c.id) === Number(dupCompId);
+      });
+      if (!inRegisterable) {
+        return setError(t.registerOnlyNonOwnedPools || "Kies een pool waarvoor je lid bent (geen eigen pool).");
+      }
       writeSelectedCompetition({
         id: dupCompId,
         name: syncRow && syncRow.name ? String(syncRow.name) : sel && sel.name ? String(sel.name) : "Pool",
@@ -495,16 +546,48 @@ export function RegisterTab() {
 
       {!registeringForInvite && step === 0 && (
         <React.Fragment>
-          <div className="card-title">Competitie</div>
-          <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:14,lineHeight:1.6}}>
-            Kies eerst de pool waarvoor je je team inschrijft. Dezelfde keuze wordt onthouden voor het tabblad Mijn team.
-          </p>
+          <div className="card-title">{t.competitionTab?.title || "Competition"}</div>
           {compsLoading ? (
             <div style={{fontSize:13,color:"var(--fg-muted)",marginBottom:14}}>Laden…</div>
+          ) : !signedIn ? (
+            <React.Fragment>
+              <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:16,lineHeight:1.6}}>
+                {t.registerSignInHint || t.competitionTab?.signInHint}
+              </p>
+              <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                <button type="button" className="btn" onClick={function(){ setTab("competition"); }}>
+                  {t.registerCreatePoolCta || t.competitionTab?.createPool || "Create competition"}
+                </button>
+                <button type="button" className="btn btn-outline" onClick={function(){ setTab("competitions"); }}>
+                  {t.registerJoinPoolCta || "Participate"}
+                </button>
+              </div>
+            </React.Fragment>
+          ) : publicComps.length === 0 ? (
+            <React.Fragment>
+              <p style={{fontSize:15,fontWeight:700,marginBottom:8,color:"var(--fg)"}}>
+                {t.registerNoPoolsTitle || "You're not in any pool yet"}
+              </p>
+              <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:16,lineHeight:1.6}}>
+                {t.registerNoPoolsBody || "Create a pool or join a public competition first."}
+              </p>
+              <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                <button type="button" className="btn" onClick={function(){ setTab("competition"); }}>
+                  {t.registerCreatePoolCta || t.competitionTab?.createPool || "Create competition"}
+                </button>
+                <button type="button" className="btn btn-outline" onClick={function(){ setTab("competitions"); }}>
+                  {t.registerJoinPoolCta || "Participate"}
+                </button>
+              </div>
+            </React.Fragment>
           ) : (
             <React.Fragment>
+              <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:14,lineHeight:1.6}}>
+                {t.registerStep1Intro ||
+                  "Choose the pool for your team. Only pools you belong to or manage."}
+              </p>
               <label style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>
-                Competition
+                {t.competitionTab?.title || "Competition"}
               </label>
               <select
                 value={compSelectId}
@@ -519,12 +602,12 @@ export function RegisterTab() {
                   );
                 })}
               </select>
+              {error && <div className="error">{error}</div>}
+              <button className="btn" onClick={handleNext} disabled={compsLoading}>
+                {t.next} →
+              </button>
             </React.Fragment>
           )}
-          {error && <div className="error">{error}</div>}
-          <button className="btn" onClick={handleNext} disabled={compsLoading}>
-            {t.next} →
-          </button>
         </React.Fragment>
       )}
 

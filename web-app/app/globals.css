@@ -196,10 +196,25 @@
   .flag{font-size:1.1em;display:inline-block}
   .badge{display:inline-block;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600;background:var(--orange-soft);color:var(--orange-deep)}
   [data-theme="dark"] .badge{background:rgba(255,107,0,.15);color:var(--orange-light)}
+  .wk-fixture-stats-modal{box-shadow:0 24px 48px rgba(0,0,0,.35)}
+  .wk-fixture-stats-meta-label{font-family:var(--wk-heading-font);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--orange);margin-bottom:6px}
+  .wk-fixture-stats-meta-value{font-size:15px;font-weight:600;color:var(--fg);line-height:1.35}
+  .wk-stats-table{width:100%;border-collapse:collapse;font-size:14px}
+  .wk-stats-table thead th{font-family:var(--wk-heading-font);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-muted);text-align:left;padding:12px 16px;background:var(--bg-2);border-bottom:1px solid var(--border)}
+  .wk-stats-table thead th:last-child{text-align:right}
+  .wk-stats-table tbody td{padding:11px 16px;border-bottom:1px solid var(--border);vertical-align:middle}
+  .wk-stats-table tbody tr:last-child td{border-bottom:none}
+  .wk-stats-table tbody tr:hover{background:var(--card-hover)}
+  .wk-stats-table tbody td:last-child{text-align:right;font-variant-numeric:tabular-nums;font-weight:700;font-family:var(--wk-heading-font);font-size:16px;color:var(--orange)}
   ::-webkit-scrollbar{width:10px;height:10px}
   ::-webkit-scrollbar-track{background:var(--bg)}
   ::-webkit-scrollbar-thumb{background:var(--border);border-radius:5px}
   ::-webkit-scrollbar-thumb:hover{background:var(--orange)}
+  @media (max-width:520px){
+    .wk-fixture-stats-modal .wk-fixture-stats-scoregrid{grid-template-columns:1fr !important;text-align:center !important}
+    .wk-fixture-stats-modal .wk-fixture-stats-scoregrid > div:first-child{text-align:center !important}
+    .wk-fixture-stats-modal .wk-fixture-stats-scoregrid > div:last-child{text-align:center !important}
+  }
   @media (max-width:680px){
     .podium{grid-template-columns:1fr}
     .podium-step{min-height:auto !important}

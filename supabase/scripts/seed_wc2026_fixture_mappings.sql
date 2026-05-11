@@ -1,19 +1,19 @@
--- WC2026 fixture_mappings: group schedule from web-app/lib/wk/tournament.ts (GROUP_MATCHES).
--- Kickoffs stored as Europe/Amsterdam wall time (+02) for June/July 2026 (matches poule UX).
--- local_key: gm-001..gm-073 (73 group games), r16-01..r16-16, qf-01..qf-08, sf-01..sf-04, thirdp-01, final-01
--- Knockout rows keep teams/kickoff/location NULL until known; api_fixture_id filled later from API-Football.
---
--- Schema at this migration: competition_id + home_team/away_team (see 20260506140500).
--- 20260510120000 renames home_team/away_team → team_1/team_2.
--- 20260511120000 replaces competition_id with api_football_league_id + season (shared rows).
---
--- For a DB built only from supabase/scripts/create_fixture_mappings.sql, use instead:
---   supabase/scripts/seed_wc2026_fixture_mappings.sql
+-- Run after supabase/scripts/create_fixture_mappings.sql (table: api_football_league_id, season, team_1, team_2, …).
+-- Resolves league + season from the `wc2026` competition row, then upserts shared fixture_mappings for that tournament.
+-- Idempotent: ON CONFLICT (api_football_league_id, season, local_key).
 
 ALTER TABLE public.fixture_mappings ADD COLUMN IF NOT EXISTS location text;
 
 WITH wc AS (
-  SELECT id FROM public.competitions WHERE slug = 'wc2026' LIMIT 1
+  SELECT
+    COALESCE(NULLIF(api_football_league_id, 0), 1) AS league_id,
+    COALESCE(
+      NULLIF(TRIM(metadata->'api_football'->>'season'), '')::integer,
+      2026
+    ) AS season_year
+  FROM public.competitions
+  WHERE slug = 'wc2026'
+  LIMIT 1
 ),
 v AS (
   SELECT * FROM (VALUES
@@ -120,33 +120,35 @@ v AS (
     ('sf-04','sf',NULL,NULL,NULL,NULL,NULL),
     ('thirdp-01','thirdp',NULL,NULL,NULL,NULL,NULL),
     ('final-01','final',NULL,NULL,NULL,NULL,NULL)
-  ) AS t(local_key, stage, api_fixture_id, kickoff_at, home_team, away_team, location)
+  ) AS t(local_key, stage, api_fixture_id, kickoff_at, team_1, team_2, location)
 )
 INSERT INTO public.fixture_mappings (
-  competition_id,
+  api_football_league_id,
+  season,
   local_key,
   stage,
   api_fixture_id,
   kickoff_at,
-  home_team,
-  away_team,
+  team_1,
+  team_2,
   location
 )
 SELECT
-  wc.id,
+  wc.league_id,
+  wc.season_year,
   v.local_key,
   v.stage,
   v.api_fixture_id::bigint,
   v.kickoff_at::timestamptz,
-  v.home_team,
-  v.away_team,
+  v.team_1,
+  v.team_2,
   v.location
 FROM wc
 CROSS JOIN v
-ON CONFLICT (competition_id, local_key) DO UPDATE SET
+ON CONFLICT (api_football_league_id, season, local_key) DO UPDATE SET
   stage = EXCLUDED.stage,
   kickoff_at = EXCLUDED.kickoff_at,
-  home_team = EXCLUDED.home_team,
-  away_team = EXCLUDED.away_team,
+  team_1 = EXCLUDED.team_1,
+  team_2 = EXCLUDED.team_2,
   location = EXCLUDED.location,
   api_fixture_id = COALESCE(public.fixture_mappings.api_fixture_id, EXCLUDED.api_fixture_id);

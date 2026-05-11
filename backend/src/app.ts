@@ -69,7 +69,7 @@ export function createApp(deps: CreateAppDeps): express.Express {
     createCompetitionOwnerRouter(gateway, env),
   );
   app.use("/api/internal", optionalBearerSupabaseJwt(env), createInternalRouter(gateway, env));
-  app.use("/api", createParticipantsRouter(gateway, env));
+  app.use("/api", createParticipantsRouter(gateway, env, logger));
 
   app.use(notFoundHandler);
   app.use(createErrorHandler(logger));
