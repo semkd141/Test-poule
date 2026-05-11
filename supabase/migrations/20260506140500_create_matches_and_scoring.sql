@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS public.fixture_mappings (
   kickoff_at timestamptz,
   home_team text,
   away_team text,
+  location text,
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (competition_id, local_key)
 );

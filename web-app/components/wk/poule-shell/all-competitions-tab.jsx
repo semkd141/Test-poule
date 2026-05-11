@@ -159,7 +159,7 @@ export function AllCompetitionsTab() {
                     <code>{c.id}</code>
                   </dd>
                 </dl>
-                {c.metadata && typeof c.metadata === "object" && Object.keys(c.metadata).length > 0 ? (
+                {/* {c.metadata && typeof c.metadata === "object" && Object.keys(c.metadata).length > 0 ? (
                   <div style={{ marginTop: 8 }}>
                     <div style={{ fontSize: 11, color: "var(--fg-muted)", marginBottom: 4 }}>
                       {tc.metadata || "Metadata"}
@@ -178,7 +178,7 @@ export function AllCompetitionsTab() {
                       {JSON.stringify(c.metadata, null, 2)}
                     </pre>
                   </div>
-                ) : null}
+                ) : null} */}
                 <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
                   {joinErrById[c.id] ? (
                     <div style={{ fontSize: 12, color: "var(--orange)", maxWidth: 480 }}>
