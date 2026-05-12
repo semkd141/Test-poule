@@ -2,7 +2,14 @@
 
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { FORMATIONS } from "../../../../lib/wk/tournament";
-import { dbBijwerkenSpelers, dbBijwerkenVeld, dbVerwijderParticipant } from "../../../../lib/wk/api-client";
+import {
+  dbBijwerkenSpelers,
+  dbBijwerkenVeld,
+  dbVerwijderParticipant,
+  fetchParticipantPlayerRollups,
+  fetchPublicCompetitionSquadRoster,
+  patchParticipantPlayerRollups,
+} from "../../../../lib/wk/api-client";
 import { toastError } from "../../../../lib/wk/toast";
 import { useApp } from "../../poule-context.jsx";
 import { CaptainBand } from "../teams/captain-band.jsx";
@@ -18,6 +25,13 @@ export function AdminRow(props) {
   const [savedSnapshot, setSavedSnapshot] = useState(JSON.stringify(initialNormalized.map(function(x){return x.punten;})));
   const [savingPoints, setSavingPoints] = useState(false);
   const [pointsSaved, setPointsSaved] = useState(false);
+
+  /** `player_points_rollup` lines (API-Football picks + points). */
+  const [rollupRows, setRollupRows] = useState([]);
+  const [rollupSnap, setRollupSnap] = useState("");
+  const [rollupLoading, setRollupLoading] = useState(true);
+  const [rollupFetched, setRollupFetched] = useState(false);
+  const [rosterNameById, setRosterNameById] = useState({});
 
   // Edit state
   const [editing, setEditing] = useState(false);
@@ -51,6 +65,89 @@ export function AdminRow(props) {
     }
   }, [props.saved]);
 
+  function snapRollup(r) {
+    return {
+      player_id: Math.floor(Number(r.player_id)) || 0,
+      pos: r.pos != null && String(r.pos).trim() ? String(r.pos).trim() : null,
+      is_captain: !!r.is_captain,
+      points: Math.max(0, Math.floor(Number(r.points)) || 0),
+    };
+  }
+
+  function rollupSerialize(rows) {
+    return JSON.stringify(rows.map(snapRollup));
+  }
+
+  var competitionId =
+    props.participant.competition_id != null ? Number(props.participant.competition_id) : NaN;
+
+  useEffect(function() {
+    var cancelled = false;
+    var pid = props.participant.id;
+    if (pid == null || pid === "") {
+      setRollupRows([]);
+      setRollupSnap("[]");
+      setRollupLoading(false);
+      setRollupFetched(true);
+      return;
+    }
+    setRollupLoading(true);
+    setRollupFetched(false);
+    (async function() {
+      try {
+        var roll = await fetchParticipantPlayerRollups(pid);
+        if (cancelled) return;
+        var list = Array.isArray(roll) ? roll : [];
+        var rows = list.map(function(r) {
+          return {
+            id: r.id != null ? Number(r.id) : undefined,
+            player_id: Math.floor(Number(r.player_id)) || 0,
+            pos: r.pos != null ? String(r.pos) : null,
+            is_captain: r.is_captain === true || r.is_captain === "true",
+            points: Math.max(0, Math.floor(Number(r.points)) || 0),
+          };
+        });
+        setRollupRows(rows);
+        setRollupSnap(rollupSerialize(rows));
+
+        var names = {};
+        if (Number.isFinite(competitionId) && competitionId > 0) {
+          try {
+            var roster = await fetchPublicCompetitionSquadRoster(competitionId);
+            if (!cancelled && Array.isArray(roster)) {
+              roster.forEach(function(entry) {
+                var id0 = Math.floor(Number(entry.player_id));
+                if (!Number.isFinite(id0) || id0 <= 0) return;
+                var label = entry.name || "#" + id0;
+                if (entry.team && String(entry.team).trim()) {
+                  label = label + " (" + String(entry.team).trim() + ")";
+                }
+                names[id0] = label;
+              });
+            }
+          } catch {
+            /* roster optional */
+          }
+        }
+        if (!cancelled) setRosterNameById(names);
+      } catch (e) {
+        if (!cancelled) {
+          console.error("fetchParticipantPlayerRollups", e);
+          setRollupRows([]);
+          setRollupSnap("[]");
+        }
+      } finally {
+        if (!cancelled) {
+          setRollupLoading(false);
+          setRollupFetched(true);
+        }
+      }
+    })();
+    return function() {
+      cancelled = true;
+    };
+  }, [props.participant.id, competitionId]);
+
   function updatePts(i, val) {
     setLocal(function(prev) {
       return prev.map(function(x, idx) {
@@ -59,15 +156,77 @@ export function AdminRow(props) {
     });
   }
 
+  function updateRollupRow(i, patch) {
+    setRollupRows(function(prev) {
+      return prev.map(function(x, idx) {
+        return idx === i ? Object.assign({}, x, patch) : x;
+      });
+    });
+  }
+
+  function deleteRollupRow(i) {
+    setRollupRows(function(prev) {
+      return prev.filter(function(_, idx) {
+        return idx !== i;
+      });
+    });
+  }
+
+  function toggleCaptainRollup(i) {
+    setRollupRows(function(prev) {
+      var next = prev.map(function(r, idx) {
+        return Object.assign({}, r, { is_captain: idx === i ? !r.is_captain : false });
+      });
+      return next;
+    });
+  }
+
+  var useRollupPointsUi = rollupFetched && rollupRows.length > 0;
+  var rollupTotal = rollupRows.reduce(function(s, r) {
+    return s + (Math.floor(Number(r.points)) || 0);
+  }, 0);
+  var rollupDirty = useRollupPointsUi && rollupSerialize(rollupRows) !== rollupSnap;
+
   const total = local.reduce(function(s, x) { return s + (Number(x.punten) || 0); }, 0);
   const currentSnapshot = JSON.stringify(local.map(function(x){return x.punten;}));
-  const isDirty = currentSnapshot !== savedSnapshot;
+  const legacyDirty = !useRollupPointsUi && currentSnapshot !== savedSnapshot;
+  const isDirty = legacyDirty || rollupDirty;
+  var displayTotal = useRollupPointsUi ? rollupTotal : total;
 
   async function savePoints() {
     setSavingPoints(true);
     try {
-      await dbBijwerkenSpelers(props.participant.id, local);
-      setSavedSnapshot(currentSnapshot);
+      if (useRollupPointsUi) {
+        var players = rollupRows
+          .filter(function(r) {
+            return Math.floor(Number(r.player_id)) > 0;
+          })
+          .map(function(r) {
+            return {
+              player_id: Math.floor(Number(r.player_id)),
+              pos: r.pos != null && String(r.pos).trim() ? String(r.pos).trim() : null,
+              is_captain: !!r.is_captain,
+              points: Math.max(0, Math.floor(Number(r.points)) || 0),
+            };
+          });
+        await patchParticipantPlayerRollups(props.participant.id, players);
+        var roll2 = await fetchParticipantPlayerRollups(props.participant.id);
+        var list2 = Array.isArray(roll2) ? roll2 : [];
+        var rows2 = list2.map(function(r) {
+          return {
+            id: r.id != null ? Number(r.id) : undefined,
+            player_id: Math.floor(Number(r.player_id)) || 0,
+            pos: r.pos != null ? String(r.pos) : null,
+            is_captain: r.is_captain === true || r.is_captain === "true",
+            points: Math.max(0, Math.floor(Number(r.points)) || 0),
+          };
+        });
+        setRollupRows(rows2);
+        setRollupSnap(rollupSerialize(rows2));
+      } else {
+        await dbBijwerkenSpelers(props.participant.id, local);
+        setSavedSnapshot(currentSnapshot);
+      }
       setPointsSaved(true);
       setTimeout(function(){ setPointsSaved(false); }, 1800);
       if (props.onReload) await props.onReload();
@@ -281,7 +440,7 @@ export function AdminRow(props) {
             <div style={{fontSize:12,color:"var(--fg-muted)"}}>{props.participant.naam} • {props.participant.systeem}</div>
           </div>
           <div style={{display:"flex",gap:10,alignItems:"center"}}>
-            <span className="badge">Totaal: {total}</span>
+            <span className="badge">Totaal: {displayTotal}</span>
             {isDirty ? (
               <button className="btn" onClick={savePoints} disabled={savingPoints}>
                 {savingPoints ? "…" : (t.save || "Save")}
@@ -290,35 +449,158 @@ export function AdminRow(props) {
           </div>
         </div>
       )}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(260px, 1fr))",gap:6}}>
-        {local.map(function(sp, i) {
-          const posLabel = t.pos[sp.positie] || sp.positie;
-          return (
-            <div key={i} className="admin-player">
-              <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                <strong style={{color:"var(--orange)"}}>{posLabel}</strong>
-                <span style={{color:"var(--fg-muted)"}}> · </span>
-                {sp.positie === "coach" ? (
-                  <span style={{fontWeight:600}}>{sp.spelerNaam || "—"}</span>
-                ) : sp.spelerNaam && sp.spelerNaam.trim() ? (
-                  <React.Fragment>
-                    <span style={{fontWeight:600}}>{sp.spelerNaam}</span>
-                    <span style={{color:"var(--fg-muted)",fontSize:"0.9em"}}> ({sp.land})</span>
-                  </React.Fragment>
-                ) : (
-                  <span style={{fontWeight:600}}>{sp.land}</span>
-                )}
-              </span>
-              <input
-                type="number"
-                className="admin-input-mini"
-                value={sp.punten}
-                onChange={function(e){updatePts(i, e.target.value);}}
-              />
+      {rollupLoading ? (
+        <div style={{ padding: 20, textAlign: "center", color: "var(--fg-muted)" }}>{t.saving || "Loading…"}</div>
+      ) : useRollupPointsUi ? (
+        <div style={{ marginTop: 4 }}>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              color: "var(--orange)",
+              marginBottom: 10,
+            }}
+          >
+            Player points (rollups)
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {rollupRows.map(function(r, i) {
+              var pid = Math.floor(Number(r.player_id)) || 0;
+              var label = rosterNameById[pid] || (pid > 0 ? "Player #" + pid : "—");
+              var posDisp =
+                r.pos != null && String(r.pos).trim()
+                  ? String(r.pos).trim()
+                  : "—";
+              return (
+                <div
+                  key={String(r.id != null ? r.id : "n-" + i)}
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 8,
+                    alignItems: "center",
+                    background: "var(--bg-3)",
+                    borderRadius: 8,
+                    padding: "10px 12px",
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  <span style={{ flex: "1 1 160px", minWidth: 0, fontSize: 13, fontWeight: 600 }}>{label}</span>
+                  <div style={{ fontSize: 11, color: "var(--fg-muted)", display: "flex", flexDirection: "column", gap: 2 }}>
+                    <span>ID</span>
+                    <span
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 600,
+                        color: "var(--fg)",
+                        minWidth: 72,
+                        padding: "6px 8px",
+                        background: "var(--bg)",
+                        borderRadius: 6,
+                        border: "1px solid var(--border)",
+                      }}
+                    >
+                      {pid > 0 ? String(pid) : "—"}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--fg-muted)", display: "flex", flexDirection: "column", gap: 2 }}>
+                    <span>Pos</span>
+                    <span
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 600,
+                        color: "var(--fg)",
+                        minWidth: 48,
+                        padding: "6px 8px",
+                        background: "var(--bg)",
+                        borderRadius: 6,
+                        border: "1px solid var(--border)",
+                      }}
+                    >
+                      {posDisp}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    title={r.is_captain ? "Remove captain" : "Captain"}
+                    onClick={function() {
+                      toggleCaptainRollup(i);
+                    }}
+                    style={{ background: "transparent", border: "none", cursor: "pointer", padding: "4px" }}
+                  >
+                    <CaptainBand size={22} active={!!r.is_captain} />
+                  </button>
+                  <label style={{ fontSize: 11, color: "var(--fg-muted)", display: "flex", flexDirection: "column", gap: 2 }}>
+                    Pts
+                    <input
+                      type="number"
+                      className="admin-input-mini"
+                      value={r.points}
+                      onChange={function(e) {
+                        updateRollupRow(i, { points: Math.max(0, Math.floor(Number(e.target.value)) || 0) });
+                      }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    style={{ marginLeft: "auto", fontSize: 12, padding: "4px 10px" }}
+                    onClick={function() {
+                      deleteRollupRow(i);
+                    }}
+                  >
+                    {t.delete || "Remove"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <React.Fragment>
+          {rollupFetched && Number.isFinite(competitionId) && competitionId > 0 ? (
+            <div style={{ marginBottom: 12 }}>
+              <p style={{ fontSize: 12, color: "var(--fg-muted)", lineHeight: 1.5, marginBottom: 8 }}>
+                No player rollups for this team yet. Picks (player id and position) are set from Register / My Team;
+                here you can only adjust points and captain once those lines exist.
+              </p>
             </div>
-          );
-        })}
-      </div>
+          ) : null}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 6 }}>
+            {local.map(function(sp, i) {
+              const posLabel = t.pos[sp.positie] || sp.positie;
+              return (
+                <div key={i} className="admin-player">
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <strong style={{ color: "var(--orange)" }}>{posLabel}</strong>
+                    <span style={{ color: "var(--fg-muted)" }}> · </span>
+                    {sp.positie === "coach" ? (
+                      <span style={{ fontWeight: 600 }}>{sp.spelerNaam || "—"}</span>
+                    ) : sp.spelerNaam && sp.spelerNaam.trim() ? (
+                      <React.Fragment>
+                        <span style={{ fontWeight: 600 }}>{sp.spelerNaam}</span>
+                        <span style={{ color: "var(--fg-muted)", fontSize: "0.9em" }}> ({sp.land})</span>
+                      </React.Fragment>
+                    ) : (
+                      <span style={{ fontWeight: 600 }}>{sp.land}</span>
+                    )}
+                  </span>
+                  <input
+                    type="number"
+                    className="admin-input-mini"
+                    value={sp.punten}
+                    onChange={function(e) {
+                      updatePts(i, e.target.value);
+                    }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </React.Fragment>
+      )}
     </div>
   );
 }

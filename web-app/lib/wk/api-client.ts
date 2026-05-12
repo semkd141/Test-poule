@@ -615,6 +615,10 @@ export async function fetchPublicCompetitionSquadRoster(competitionId: number): 
 
 export type PlayerRollupRow = {
   id?: number;
+  competition_id?: number;
+  team_id?: number;
+  api_football_league_id?: number;
+  season?: number;
   player_id: number;
   pos: string | null;
   is_captain: boolean;
