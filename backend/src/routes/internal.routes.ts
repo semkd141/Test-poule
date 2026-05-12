@@ -1,5 +1,6 @@
 import { Router } from "express";
 import type { Env } from "../config/env.js";
+import type { AppLogger } from "../lib/logger.js";
 import type { SupabaseGateway } from "../services/supabase-gateway.js";
 import { HttpError } from "../shared/http-error.js";
 import { asyncHandler } from "../middleware/async-handler.js";
@@ -7,8 +8,16 @@ import { ApiFootballClient, type ApiFootballFixture } from "../services/api-foot
 import { ScoringEngine } from "../services/scoring-engine.js";
 import { z } from "zod";
 import { isPlatformOperator } from "../auth/platform-operator.js";
-import { resolvedLeagueFields, defaultApiFootballSeasonForLeagueType } from "../league-type-resolve.js";
-import { syncFixtureSquadMembers } from "../services/fixture-squad-sync.service.js";
+import {
+  resolvedLeagueFields,
+  defaultApiFootballSeasonForLeagueType,
+  parseApiFootballSeasonYearFromSeasonLabel,
+} from "../league-type-resolve.js";
+import {
+  FIXTURE_SQUAD_BATCH_BACKGROUND_MESSAGE,
+  startFixtureSquadBackgroundBatch,
+  syncFixtureSquadMembers,
+} from "../services/fixture-squad-sync.service.js";
 
 function ensureMetadataApiFootballLeagueSeason(
   existing: unknown,
@@ -52,7 +61,7 @@ function toMatchPayload(competitionId: number, src: ApiFootballFixture): Record<
   };
 }
 
-export function createInternalRouter(gateway: SupabaseGateway, env: Env): Router {
+export function createInternalRouter(gateway: SupabaseGateway, env: Env, log: AppLogger): Router {
   const router = Router();
 
   const competitionCreateSchema = z.object({
@@ -108,10 +117,13 @@ export function createInternalRouter(gateway: SupabaseGateway, env: Env): Router
       const parsed = competitionCreateSchema.safeParse(req.body);
       if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
       const leagueFields = await resolvedLeagueFields(gateway, parsed.data.league_type);
+      const defaultSeason = defaultApiFootballSeasonForLeagueType(leagueFields.league_type);
+      const labelSeason = parseApiFootballSeasonYearFromSeasonLabel(parsed.data.season_label);
+      const chosenSeason = labelSeason ?? defaultSeason;
       const meta = ensureMetadataApiFootballLeagueSeason(
         parsed.data.metadata,
         leagueFields.api_football_league_id,
-        defaultApiFootballSeasonForLeagueType(leagueFields.league_type),
+        chosenSeason,
       );
       const body: Record<string, unknown> = {
         slug: parsed.data.slug.trim().toLowerCase(),
@@ -191,14 +203,20 @@ export function createInternalRouter(gateway: SupabaseGateway, env: Env): Router
     }),
   );
 
-  const fetchFixtureSquadBodySchema = z.object({
+  const fetchFixtureSquadSingleSchema = z.object({
     fixtureId: z.coerce.number().int().positive(),
   });
+  const fetchFixtureSquadBatchSchema = z.object({
+    fixtureIds: z.array(z.coerce.number().int().positive()).min(1).max(500),
+    leagueId: z.coerce.number().int().positive(),
+    season: z.coerce.number().int().positive(),
+  });
+  const fetchFixtureSquadBodySchema = z.union([fetchFixtureSquadBatchSchema, fetchFixtureSquadSingleSchema]);
 
   /**
-   * Fetches API-Football squad (players + coaches) once per `fixtureId`, stores new rows in
-   * `fixture_squad_members` (skips whole `country` sides already present anywhere in that table),
-   * and records `fixture_squad_fetched` so the upstream API is not called again for the same fixture.
+   * Single: `{ fixtureId }` — sync one fixture (skips if rows exist or already fetched; per-side skip when
+   * league+season+`team` already exists). Batch: `{ fixtureIds, leagueId, season }` — queues a background job
+   * (3s between upstream API calls); immediate JSON `{ message: "Squad members are being fetched." }`.
    */
   router.post(
     "/fixture-squad/fetch",
@@ -207,6 +225,21 @@ export function createInternalRouter(gateway: SupabaseGateway, env: Env): Router
       const parsed = fetchFixtureSquadBodySchema.safeParse(req.body);
       if (!parsed.success) {
         throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
+      }
+      if ("fixtureIds" in parsed.data) {
+        if (!env.API_FOOTBALL_KEY) throw new HttpError(500, "API_FOOTBALL_KEY is not configured");
+        startFixtureSquadBackgroundBatch(
+          {
+            fixtureIds: parsed.data.fixtureIds,
+            leagueId: parsed.data.leagueId,
+            season: parsed.data.season,
+          },
+          gateway,
+          env,
+          log,
+        );
+        res.json({ message: FIXTURE_SQUAD_BATCH_BACKGROUND_MESSAGE });
+        return;
       }
       const out = await syncFixtureSquadMembers(parsed.data.fixtureId, gateway, env);
       res.json(out);
@@ -247,6 +280,15 @@ export function createInternalRouter(gateway: SupabaseGateway, env: Env): Router
         scoredMatchesSeen: scoreRes.matches,
         participantsTouched: scoreRes.participantsTouched,
       });
+    }),
+  );
+
+  router.get(
+    "/analytics",
+    asyncHandler(async (req, res) => {
+      if (!isPlatformOperator(req, env)) throw new HttpError(401, "Invalid internal authorization");
+      const snap = await gateway.getAdminAnalyticsSnapshot();
+      res.json(snap);
     }),
   );
 

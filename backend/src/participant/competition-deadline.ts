@@ -24,12 +24,31 @@ export function extractDeadlineFromConfigSpelers(spelers: unknown): Date {
   return new Date(DEFAULT_DEADLINE_ISO);
 }
 
+/** Pool `teams` __config__ row: prefer typed columns, then legacy `spelers` JSON on the same row if present. */
+export function extractDeadlineFromConfigRow(configRow: Record<string, unknown> | null): Date {
+  if (!configRow) return new Date(DEFAULT_DEADLINE_ISO);
+  const at = configRow.registration_deadline_at;
+  if (at !== undefined && at !== null && String(at).trim()) {
+    const d = new Date(String(at));
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  return extractDeadlineFromConfigSpelers(configRow.spelers);
+}
+
 export function isPastCompetitionDeadline(configRow: Record<string, unknown> | null, nowMs = Date.now()): boolean {
-  const deadline = extractDeadlineFromConfigSpelers(configRow?.spelers);
+  const deadline = extractDeadlineFromConfigRow(configRow);
   return nowMs > deadline.getTime();
 }
 
-/** Human label from the `__config__` row `spelers` JSON (`deadlineLabel`), if set. */
+/** Human label: `teams.registration_deadline_label`, then legacy JSON `deadlineLabel` in `spelers`. */
+export function extractDeadlineLabelFromConfigRow(configRow: Record<string, unknown> | null): string | null {
+  if (!configRow) return null;
+  const lbl = configRow.registration_deadline_label;
+  if (lbl !== undefined && lbl !== null && String(lbl).trim()) return String(lbl).trim();
+  return extractDeadlineLabelFromConfigSpelers(configRow.spelers);
+}
+
+/** @deprecated Prefer extractDeadlineLabelFromConfigRow */
 export function extractDeadlineLabelFromConfigSpelers(spelers: unknown): string | null {
   let cfg: Record<string, unknown> | null = null;
   if (typeof spelers === "string") {

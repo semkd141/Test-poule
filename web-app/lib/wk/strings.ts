@@ -1,7 +1,7 @@
 // @ts-nocheck
 export const T = {
   nl: { title:"WK 2026 POULE", subtitle:"USA • CANADA • MEXICO",
-    tabs:{ranking:"Ranglijst",matches:"Wedstrijden",matches2:"Wedstrijden 2",results:"Uitslagen",teams:"Teams",competitions:"Alle competities",register:"Inschrijven",edit:"Mijn team",rules:"Regels",competition:"Competitie",poolPoints:"Puntenbeheer",admin:"Beheer"},
+    tabs:{ranking:"Ranglijst",matches:"Wedstrijden",matches2:"Wedstrijden 2",results:"Uitslagen",teams:"Teams",competitions:"Alle competities",register:"Inschrijven",register2:"Inschrijven 2",edit:"Mijn team",rules:"Regels",competition:"Competitie",poolPoints:"Puntenbeheer",admin:"Beheer"},
     competitionTab:{
       title:"Competitie",
       intro:"Pools die jij aanmaakt, beheer je hier. Deel de slug zodat vrienden bij dezelfde competitie inschrijven.",
@@ -62,12 +62,12 @@ export const T = {
       importFixturesBusy:"Bezig met importeren…",
       importFixturesSuccess:"{n} wedstrijden opgeslagen ({total} uit API).",
       importFixturesNone:"Geen rijen geïmporteerd.",
-      fetchFixtureSquadButton:"Spelers ophalen",
-      fetchFixtureSquadBusy:"…",
-      fetchFixtureSquadHint:"Laad spelers en coaches voor deze wedstrijd via API-Football (eenmalig per fixture-id).",
-      fetchFixtureSquadNoId:"Koppel eerst een API fixture-id aan deze rij.",
-      fetchFixtureSquadFailed:"Ophalen van selectie mislukt",
-      fetchFixtureSquadSuccess:"Spelers voor deze wedstrijd opgehaald",
+      fetchAllFixtureSquadsButton:"Spelers voor alle wedstrijden ophalen",
+      fetchAllFixtureSquadsBusy:"Bezig met starten…",
+      fetchAllFixtureSquadsHint:"Start op de server een achtergrondtaak: per wedstrijd max. één API-aanroep, daarna 3 seconden pauze. Al ingelezen teams (zelfde league, seizoen en teamnaam) worden overgeslagen.",
+      fetchAllFixtureSquadsStarted:"Selecties worden opgehaald (achtergrond).",
+      fetchAllFixtureSquadsFailed:"Ophalen van selecties mislukt",
+      fetchAllFixtureSquadsNoMappings:"Geen wedstrijden met een geldige API fixture-id.",
     },
     allCompetitionsTab:{
       title:"Alle competities",
@@ -88,6 +88,8 @@ export const T = {
       closedHint:"De pool is gestart — inschrijven is gesloten.",
       ownerIdOnly:"Organizer-account",
       platformPool:"Platform / standaard pool",
+      joinOwnPoolError:
+        "Dit is jouw eigen pool. Je beheert die onder Competitie; je kunt jezelf hier niet als deelnemer aanmelden. Stuur uitnodigingen naar anderen om mee te doen.",
     },
     matches2Tab:{
       selectCompetition:"Competitie",
@@ -122,12 +124,47 @@ export const T = {
       emptyForPool:"Nog geen teams in deze pool.",
     },
     duplicateRegistration:"Dit e-mailadres heeft al een team in deze competitie.",
+    registerDuplicateToastHint:"Ga naar het tabblad Mijn team om je team bij te werken. Je wordt nu daarheen gebracht.",
     registerSignInHint:"Log in via Mijn team om je pools te zien en je team in te schrijven.",
     registerNoPoolsTitle:"Je zit nog in geen pool",
-    registerNoPoolsBody:"Neem deel via een uitnodiging of via de openbare competitielijst, en schrijf je daarna hier in. Pools die je zelf aanmaakt beheer je in het tabblad Competitie.",
+    registerNoPoolsBody:
+      "Neem deel via een uitnodiging of via de openbare competitielijst, en schrijf je daarna hier in. Pools die je zelf aanmaakt beheer je in het tabblad Competitie.",
+    registerNoPoolsOwnPoolWarning:
+      "Je kunt geen team inschrijven voor een competitie die je zelf hebt aangemaakt — alleen genodigden (na het accepteren van de uitnodiging) kunnen zich daar inschrijven.",
     registerCreatePoolCta:"Competitie aanmaken",
     registerJoinPoolCta:"Deelnemen",
     registerStep1Intro:"Kies de pool waarvoor je je team inschrijft. Alleen pools waar je lid bent geworden (bijv. via uitnodiging)—niet pools die je zelf hebt aangemaakt. Dezelfde keuze wordt onthouden voor Mijn team.",
+    editMyTeamTab:{
+      pickCompetitionTitle:"Kies een competitie",
+      pickCompetitionIntro:
+        "Alleen pools waar je lid bent of waarvoor je al een team hebt ingeschreven, staan in deze lijst—niet elke openbare competitie. Pools die je alleen organiseert (zonder hier zelf een team) verschijnen hier niet.",
+      pickCompetitionRemember:"Deze keuze wordt onthouden voor deze browsersessie.",
+      noTeamInPoolTitle:"Geen team in deze pool",
+      noTeamInPoolDescription:
+        "Schrijf je eerst in via het tabblad Inschrijven met dit e-mailadres, of kies een andere pool waarvoor je al een team hebt.",
+    },
+    adminAnalytics:{
+      title:"Analytics",
+      intro:"Live totalen uit de database: pools, inschrijvingen, uitnodigingen en voetbal-/scoringdata.",
+      refresh:"Vernieuwen",
+      loading:"Analytics laden…",
+      generatedAt:"Laatst opgehaald",
+      loadError:"Kon analytics niet laden.",
+      secPools:"Pools & teams",
+      secEngagement:"Lidmaatschap & uitnodigingen",
+      secData:"API-Football data",
+      secScoring:"Wedstrijden & scoring",
+      secTopPools:"Pools met de meeste teams",
+      secRecent:"Recente team-inschrijvingen",
+      colPool:"Pool",
+      colTeams:"Teams",
+      colOwner:"Eigenaar",
+      colWhen:"Tijdstip",
+      colEmail:"E-mail",
+      colTeam:"Team",
+      colCompetition:"Pool-id",
+      platform:"Platform",
+    },
     registerOnlyNonOwnedPools:"Schrijf je hier alleen in voor pools waar je lid bent (uitnodiging of openbare deelname)—niet voor pools die je zelf beheert.",
     registerInviteBanner:"Je schrijft je in voor de pool:",
     countdownTo:"AFTELLEN NAAR HET WK", days:"Dagen",hours:"Uren",minutes:"Min",seconds:"Sec", started:"Het WK is begonnen!",
@@ -147,7 +184,7 @@ export const T = {
     timezoneInfo:"Tijden in tijdzone:",changeTz:"Andere tijdzone",groupLabel:"Groep",playerNamePlaceholder:"Naam van de speler",fillPlayerNames:"Vul alle spelernamen in",searchPlaceholder:"Zoek team...",coachNamePlaceholder:"Naam van de bondscoach (bijv. Ronald Koeman)",fillCoachName:"Vul de naam van de bondscoach in",duplicateEmail:"Dit e-mailadres is al geregistreerd. Eén team per e-mailadres toegestaan.",knockoutInfo:"De knockout-wedstrijden worden ingevuld zodra de groepsfase is afgelopen.",tbd:"Nog te bepalen",unsaved:"Niet opgeslagen",savingAutosave:"Opslaan…",deadlineConfig:"Inschrijfdeadline instellen",deadlineDateLabel:"Datum & tijd",deadlineDisplayLabel:"Weergegeven tekst",saveDeadline:"Deadline opslaan",confirmLogout:"Weet je zeker dat je wilt uitloggen uit het beheerpaneel?",cancel:"Annuleren",settings:"Instellingen",themeLabel:"Thema",darkTheme:"Donker",lightTheme:"Licht",languageLabel:"Taal",timezoneLabel:"Tijdzone",adminLoggedIn:"Ingelogd als beheerder",superadminLabel:"Superadmin",superadminHint:"Volledige toegang. Alleen dit account ziet het Beheer-tabblad.",openAdminPanel:"Beheer openen",changeInSettings:"Wijzig in instellingen ⚙️",edit:"Bewerken",editTeam:"Team bewerken",teamName:"Teamnaam",userName:"Naam",system:"Systeem",fillRequired:"Vul alle verplichte velden in",choosePlayer:"Kies speler",chooseCoach:"Kies bondscoach",playerNameManual:"Naam (handmatig)",rulesContent:{title:"Spelregels",intro:"Welkom bij de WK 2026 Poule! Hier lees je hoe het spel werkt, hoe je punten verdient en wat de belangrijkste regels zijn.",howTitle:"Hoe werkt het?",how1:"Schrijf je in vóór de inschrijfdeadline.",how2:"Kies een spelsysteem (4-3-3, 4-4-2 of 3-4-3).",how3:"Kies per positie één speler uit een land. Elk land mag je maar 1x gebruiken — maar andere deelnemers mogen hetzelfde land ook kiezen.",how4:"Kies een bondscoach — het land van de coach telt ook als één van jouw landkeuzes.",how5:"Tijdens het toernooi verdien je punten op basis van prestaties van je gekozen landen en spelers.",how6:"Wie aan het einde de meeste punten heeft, wint!",deadlineTitle:"Inschrijfdeadline",deadlineText:"Inschrijven kan tot:",deadlineNote:"Daarna is inschrijven niet meer mogelijk en kun je je team niet meer wijzigen.",pointsTitle:"Puntentelling",pointsIntro:"Punten verschillen per positie. Aanvallers verdienen meer voor doelpunten, verdedigers voor clean sheets, enz.",eventCol:"Gebeurtenis",evWin:"Wedstrijd gewonnen (land)",evDraw:"Gelijkspel (land)",evGoal:"Doelpunt",evAssist:"Assist",evClean:"Geen tegendoelpunt",evPenalty:"Penalty gestopt",evOg:"Eigen doelpunt",evYellow:"Gele kaart",ev2Yellow:"2x geel = rood",evRed:"Directe rode kaart",evSub:"Geslaagde wissel (doelpunt na wissel)",evChampion:"Wereldkampioen",rulesTitle:"Belangrijke regels",rule1:"Je kunt je inschrijven met één e-mailadres — één team per persoon.",rule2:"Binnen jouw team mag elk land maar één keer voorkomen.",rule3:"Andere deelnemers mogen wel hetzelfde land kiezen — er is geen exclusiviteit tussen teams.",rule4:"Na de inschrijfdeadline kun je je team niet meer wijzigen.",rule5:"Punten worden continu bijgewerkt door de beheerder tijdens het toernooi.",rule6:"Bij gelijke eindstand wint degene met de meeste doelpunten van zijn aanvallers.",captainTitle:"Aanvoerder",captainText:"Jij kiest één speler als aanvoerder. Als zijn land wereldkampioen wordt, verdient jouw aanvoerder de kampioenspunten — net als al je andere spelers van dat land. De aanvoerder geeft geen extra bonuspunten bovenop.",captainNote:"Je aanvoerder is zichtbaar met een oranje band op je opstellingsbord. Kies verstandig — een favoriet land geeft de beste kans op de bonus!",exampleTitle:"Voorbeeldteam (4-3-3)",exampleIntro:"Een geldig teamvoorbeeld. Elk land maar 1x gebruikt, aanvoerder gemarkeerd met het bandje.",exampleNote:"In dit voorbeeld wordt Argentinië twee keer gebruikt — Lautaro Martínez als aanvaller én Scaloni als coach. Dat is niet toegestaan. Elk land maar 1x.",mistakesTitle:"Veelvoorkomende fouten",contactText:"Heb je vragen of zie je een fout in de puntentelling? Neem contact op met de organisator van de poule.",privacyTitle:"Privacy",privacyText:"Je e-mailadres wordt alleen gebruikt om dubbele inschrijvingen te voorkomen en wordt niet gedeeld met derden."}
   },
   en: { title:"WC 2026 POOL", subtitle:"USA • CANADA • MEXICO",
-    tabs:{ranking:"Ranking",matches:"Matches",matches2:"Matches 2",results:"Results",teams:"Teams",competitions:"All competitions",register:"Register",edit:"My Team",rules:"Rules",competition:"Competition",poolPoints:"ManagePoints",admin:"Admin"},
+    tabs:{ranking:"Ranking",matches:"Matches",matches2:"Matches 2",results:"Results",teams:"Teams",competitions:"All competitions",register:"Register",register2:"Register 2",edit:"My Team",rules:"Rules",competition:"Competition",poolPoints:"ManagePoints",admin:"Admin"},
     competitionTab:{
       title:"Competition",
       intro:"Pools you create are yours to manage. Share the slug so others register in the same competition.",
@@ -208,12 +245,12 @@ export const T = {
       importFixturesBusy:"Importing…",
       importFixturesSuccess:"Saved {n} fixtures ({total} from API).",
       importFixturesNone:"No rows imported.",
-      fetchFixtureSquadButton:"Fetch players",
-      fetchFixtureSquadBusy:"…",
-      fetchFixtureSquadHint:"Load players and coaches for this match from API-Football (once per fixture id).",
-      fetchFixtureSquadNoId:"Set an API fixture id on this row first.",
-      fetchFixtureSquadFailed:"Could not fetch squad",
-      fetchFixtureSquadSuccess:"players with this fixture fetched",
+      fetchAllFixtureSquadsButton:"Fetch players for all fixtures",
+      fetchAllFixtureSquadsBusy:"Starting…",
+      fetchAllFixtureSquadsHint:"Starts a background job on the server: one API call per fixture, then a 3 second pause. Sides already stored for this league, season, and team name are skipped.",
+      fetchAllFixtureSquadsStarted:"Squad members are being fetched.",
+      fetchAllFixtureSquadsFailed:"Could not start squad fetch",
+      fetchAllFixtureSquadsNoMappings:"No fixtures with a valid API fixture id yet.",
     },
     allCompetitionsTab:{
       title:"All competitions",
@@ -234,6 +271,8 @@ export const T = {
       closedHint:"This pool has started — registration is closed.",
       ownerIdOnly:"Organizer account",
       platformPool:"Platform / seeded pool",
+      joinOwnPoolError:
+        "This is a pool you created. Manage it under Competition—you can’t join it here as a player. Invite others by email if they should register a team.",
     },
     matches2Tab:{
       selectCompetition:"Competition",
@@ -268,12 +307,47 @@ export const T = {
       emptyForPool:"No teams registered in this pool yet.",
     },
     duplicateRegistration:"This email already has a team in this competition.",
+    registerDuplicateToastHint:"Go to the My team tab to update your squad. Taking you there now.",
     registerSignInHint:"Sign in via My Team to see your pools and register your squad.",
     registerNoPoolsTitle:"You're not in any pool yet",
-    registerNoPoolsBody:"Join using an invitation link or from the public competition list, then register your team here. Pools you create are managed in the Competition tab.",
+    registerNoPoolsBody:
+      "Join using an invitation link or from the public competition list, then register your team here. Pools you create are managed in the Competition tab.",
+    registerNoPoolsOwnPoolWarning:
+      "You cannot register a team in a competition you created yourself—only people who join via your email invitation can register a team there.",
     registerCreatePoolCta:"Create competition",
     registerJoinPoolCta:"Participate",
     registerStep1Intro:"Choose the pool for your team. Only pools you joined (for example after an invitation)—not pools you created yourself. The same choice is remembered for My Team.",
+    editMyTeamTab:{
+      pickCompetitionTitle:"Choose a competition",
+      pickCompetitionIntro:
+        "Only pools you belong to as a member, or where you already have a team, are listed—not every public competition. Pools you only organize (without a team in that pool) are not shown here.",
+      pickCompetitionRemember:"This choice is remembered for this browser session.",
+      noTeamInPoolTitle:"No team registered for this pool",
+      noTeamInPoolDescription:
+        "Register on the Register tab with this email first, or choose another competition where you already have a team.",
+    },
+    adminAnalytics:{
+      title:"Analytics",
+      intro:"Live totals from the database: competitions, registrations, invitations, and football/scoring footprint.",
+      refresh:"Refresh",
+      loading:"Loading analytics…",
+      generatedAt:"Last fetched",
+      loadError:"Could not load analytics.",
+      secPools:"Pools & teams",
+      secEngagement:"Membership & invites",
+      secData:"API-Football data",
+      secScoring:"Matches & scoring",
+      secTopPools:"Pools with most teams",
+      secRecent:"Recent team sign-ups",
+      colPool:"Pool",
+      colTeams:"Teams",
+      colOwner:"Owner",
+      colWhen:"When",
+      colEmail:"Email",
+      colTeam:"Team",
+      colCompetition:"Pool id",
+      platform:"Platform",
+    },
     registerOnlyNonOwnedPools:"Register here only for pools you joined (invitation or public list)—not pools you created yourself.",
     registerInviteBanner:"You are registering for pool:",
     countdownTo:"COUNTDOWN TO THE WORLD CUP", days:"Days",hours:"Hours",minutes:"Min",seconds:"Sec", started:"The World Cup has started!",
@@ -293,7 +367,7 @@ export const T = {
     timezoneInfo:"Times in timezone:",changeTz:"Change timezone",groupLabel:"Group",playerNamePlaceholder:"Player name",fillPlayerNames:"Fill in all player names",searchPlaceholder:"Search team...",coachNamePlaceholder:"Coach name (e.g. Ronald Koeman)",fillCoachName:"Fill in the coach name",duplicateEmail:"This email is already registered. One team per email allowed.",knockoutInfo:"Knockout matches will appear once the group stage ends.",tbd:"TBD",unsaved:"Unsaved",savingAutosave:"Saving…",deadlineConfig:"Set registration deadline",deadlineDateLabel:"Date & time",deadlineDisplayLabel:"Displayed text",saveDeadline:"Save deadline",confirmLogout:"Are you sure you want to log out of the admin panel?",cancel:"Cancel",settings:"Settings",themeLabel:"Theme",darkTheme:"Dark",lightTheme:"Light",languageLabel:"Language",timezoneLabel:"Timezone",adminLoggedIn:"Logged in as admin",superadminLabel:"Superadmin",superadminHint:"Full access. Only this account sees the Admin tab.",openAdminPanel:"Open admin panel",changeInSettings:"Change in settings ⚙️",edit:"Edit",editTeam:"Edit team",teamName:"Team name",userName:"Name",system:"System",fillRequired:"Fill in all required fields",choosePlayer:"Choose player",chooseCoach:"Choose coach",playerNameManual:"Name (manual)",rulesContent:{title:"Game Rules",intro:"Welcome to the WC 2026 Pool! Below you can read how the game works, how to earn points, and the most important rules.",howTitle:"How does it work?",how1:"Register before the deadline.",how2:"Choose a formation (4-3-3, 4-4-2 or 3-4-3).",how3:"Pick a player from a country for each position. Each country can only appear once in your team — but other participants may choose the same country.",how4:"Choose a head coach — the coach's country also counts as one of your country slots.",how5:"During the tournament, you earn points based on the performance of your chosen countries and players.",how6:"The person with the most points at the end wins!",deadlineTitle:"Registration deadline",deadlineText:"You can register until:",deadlineNote:"After that, registration closes and your team is final.",pointsTitle:"Points system",pointsIntro:"Points differ per position. Attackers get more points for goals, defenders for clean sheets, etc.",eventCol:"Event",evWin:"Match won (country)",evDraw:"Draw (country)",evGoal:"Goal",evAssist:"Assist",evClean:"Clean sheet",evPenalty:"Penalty saved",evOg:"Own goal",evYellow:"Yellow card",ev2Yellow:"2 yellows = red",evRed:"Direct red card",evSub:"Successful substitution (goal after sub)",evChampion:"World Champion",rulesTitle:"Important rules",rule1:"You can register with one email address — one team per person.",rule2:"Within your team, each country can only appear once.",rule3:"Other participants can pick the same country — no exclusivity between teams.",rule4:"After the deadline, your team cannot be changed.",rule5:"Points are updated continuously by the admin during the tournament.",rule6:"In case of a tie, whoever has the most goals from their attackers wins.",contactText:"Got questions or spotted an error in the points? Contact the pool organizer.",privacyTitle:"Privacy",privacyText:"Your email address is only used to prevent duplicate registrations and is not shared with third parties."}
   },
   es: { title:"QUINIELA MUNDIAL 2026", subtitle:"USA • CANADA • MEXICO",
-    tabs:{ranking:"Clasificación",matches:"Partidos",matches2:"Partidos 2",results:"Resultados",teams:"Equipos",competitions:"Todas las competiciones",register:"Inscribirse",edit:"Mi equipo",rules:"Reglas",competition:"Competición",poolPoints:"Puntos",admin:"Admin"},
+    tabs:{ranking:"Clasificación",matches:"Partidos",matches2:"Partidos 2",results:"Resultados",teams:"Equipos",competitions:"Todas las competiciones",register:"Inscribirse",register2:"Inscribirse 2",edit:"Mi equipo",rules:"Reglas",competition:"Competición",poolPoints:"Puntos",admin:"Admin"},
     matches2Tab:{
       selectCompetition:"Competición",
       noCompetitionsList:"No hay competiciones disponibles.",
@@ -324,7 +398,7 @@ export const T = {
     timezoneInfo:"Horarios en zona:",changeTz:"Cambiar zona",groupLabel:"Grupo",playerNamePlaceholder:"Nombre del jugador",fillPlayerNames:"Completa todos los nombres",searchPlaceholder:"Buscar equipo...",coachNamePlaceholder:"Nombre del DT (ej. Ronald Koeman)",fillCoachName:"Ingresa el nombre del DT",duplicateEmail:"Este email ya está registrado. Un equipo por email.",knockoutInfo:"Los partidos eliminatorios aparecerán al finalizar la fase de grupos.",tbd:"Por definir",unsaved:"Sin guardar",savingAutosave:"Guardando…",deadlineConfig:"Configurar fecha límite",deadlineDateLabel:"Fecha y hora",deadlineDisplayLabel:"Texto mostrado",saveDeadline:"Guardar fecha",confirmLogout:"¿Seguro que quieres cerrar sesión del panel?",cancel:"Cancelar",settings:"Configurações",themeLabel:"Tema",darkTheme:"Escuro",lightTheme:"Claro",languageLabel:"Idioma",timezoneLabel:"Fuso horário",adminLoggedIn:"Logado como admin",changeInSettings:"Alterar nas configurações ⚙️",edit:"Editar",editTeam:"Editar time",teamName:"Nome do time",userName:"Nome",system:"Sistema",fillRequired:"Preencha todos os campos",choosePlayer:"Escolher jogador",chooseCoach:"Escolher técnico",playerNameManual:"Nome (manual)",rulesContent:{title:"Regras do jogo",intro:"Bem-vindo ao bolão da Copa do Mundo 2026! Veja como funciona e como ganhar pontos.",howTitle:"Como funciona?",how1:"Inscreva-se antes do prazo.",how2:"Escolha uma formação (4-3-3, 4-4-2 ou 3-4-3).",how3:"Escolha um país para cada posição. Cada país só pode ser escolhido uma vez por pessoa.",how4:"Informe o nome do técnico.",how5:"Durante o torneio você ganha pontos com base no desempenho.",how6:"Quem tiver mais pontos no final ganha!",deadlineTitle:"Prazo de inscrição",deadlineText:"Inscrições até:",deadlineNote:"Após o prazo seu time não pode ser alterado.",pointsTitle:"Sistema de pontos",pointsIntro:"Os pontos variam por posição. Atacantes ganham mais por gols, zagueiros por jogos sem sofrer gol.",eventCol:"Evento",evWin:"Jogo ganho (país)",evDraw:"Empate (país)",evGoal:"Gol",evAssist:"Assistência",evClean:"Sem sofrer gol",evPenalty:"Pênalti defendido",evOg:"Gol contra",evYellow:"Cartão amarelo",ev2Yellow:"2 amarelos = vermelho",evRed:"Vermelho direto",evSub:"Substituição certa (gol após substituição)",evChampion:"Campeão Mundial",rulesTitle:"Regras importantes",rule1:"Inscrição com um email — um time por pessoa.",rule2:"No seu time cada país só pode aparecer uma vez.",rule3:"Outros participantes podem escolher o mesmo país.",rule4:"Após o prazo seu time não pode ser alterado.",rule5:"Os pontos são atualizados continuamente pelo admin.",rule6:"Em caso de empate, quem tiver mais gols dos atacantes ganha.",prizesTitle:"Prêmios & contato",prizesText:"Os prêmios são anunciados pelo organizador. Inscrições e pagamentos são feitos separadamente.",contactText:"Dúvidas? Contate o organizador.",privacyTitle:"Privacidade",privacyText:"Seu email é usado apenas para evitar inscrições duplicadas.",captainTitle:"Capitão",captainText:"Você escolhe um jogador como capitão. Se o país dele for campeão, ele ganha os pontos de campeão igual aos outros jogadores daquele país.",captainNote:"Seu capitão aparece com uma braçadeira laranja. Escolha com sabedoria!",exampleTitle:"Time exemplo (4-3-3)",exampleIntro:"Exemplo válido: cada país uma vez, capitão com braçadeira.",exampleNote:"Argentina usada duas vezes é erro — não permitido.",mistakesTitle:"Erros comuns"},settings:"Ajustes",themeLabel:"Tema",darkTheme:"Oscuro",lightTheme:"Claro",languageLabel:"Idioma",timezoneLabel:"Zona horaria",adminLoggedIn:"Sesión iniciada como admin",changeInSettings:"Cambiar en ajustes ⚙️",edit:"Editar",editTeam:"Editar equipo",teamName:"Nombre del equipo",userName:"Nombre",system:"Sistema",fillRequired:"Completa todos los campos",choosePlayer:"Elige jugador",chooseCoach:"Elige DT",playerNameManual:"Nombre (manual)",rulesContent:{title:"Reglas del juego",intro:"¡Bienvenido a la quiniela del Mundial 2026! Aquí encontrarás cómo funciona, cómo ganar puntos y las reglas principales.",howTitle:"¿Cómo funciona?",how1:"Inscríbete antes de la fecha límite.",how2:"Elige una formación (4-3-3, 4-4-2 o 3-4-3).",how3:"Elige un país para cada posición. Cada país solo puede elegirse una vez por persona.",how4:"Indica el nombre del DT.",how5:"Durante el torneo ganas puntos según el rendimiento de tus países y jugadores.",how6:"¡Gana quien tenga más puntos al final!",deadlineTitle:"Fecha límite de inscripción",deadlineText:"Puedes inscribirte hasta:",deadlineNote:"Después no podrás modificar tu equipo.",pointsTitle:"Sistema de puntos",pointsIntro:"Los puntos varían según la posición. Atacantes ganan más por goles, defensas por arcos en cero, etc.",eventCol:"Evento",evWin:"Partido ganado (país)",evDraw:"Empate (país)",evGoal:"Gol",evAssist:"Asistencia",evClean:"Arco en cero",evPenalty:"Penalty atajado",evOg:"Gol en contra",evYellow:"Tarjeta amarilla",ev2Yellow:"2 amarillas = roja",evRed:"Roja directa",evSub:"Cambio exitoso (gol tras cambio)",evChampion:"Campeón mundial",rulesTitle:"Reglas importantes",rule1:"Puedes inscribirte con un email — un equipo por persona.",rule2:"Dentro de tu equipo, cada país solo puede aparecer una vez.",rule3:"Otros participantes pueden elegir el mismo país.",rule4:"Tras la fecha límite no puedes modificar tu equipo.",rule5:"Los puntos se actualizan continuamente por el admin durante el torneo.",rule6:"En caso de empate, gana quien tenga más goles de sus atacantes.",prizesTitle:"Premios y contacto",prizesText:"Los premios los anuncia el organizador de la quiniela. La inscripción y pagos se gestionan aparte.",contactText:"¿Preguntas o ves un error? Contacta al organizador.",privacyTitle:"Privacidad",privacyText:"Tu email solo se usa para evitar inscripciones duplicadas y no se comparte con terceros.",captainTitle:"Capitán",captainText:"Eliges un jugador como capitán. Si su país es campeón del mundo, gana los puntos de campeón igual que tus otros jugadores de ese país.",captainNote:"Tu capitán aparece con un brazalete naranja. ¡Elige con sabiduría!",exampleTitle:"Equipo ejemplo (4-3-3)",exampleIntro:"Ejemplo válido: cada país una vez, capitán con brazalete.",exampleNote:"Argentina usada dos veces es un error — no está permitido.",mistakesTitle:"Errores comunes"}
   },
   fr: { title:"COUPE DU MONDE 2026", subtitle:"USA • CANADA • MEXICO",
-    tabs:{ranking:"Classement",matches:"Matchs",matches2:"Matchs 2",results:"Résultats",teams:"Équipes",competitions:"Toutes les compétitions",register:"Inscription",edit:"Mon équipe",rules:"Règles",competition:"Compétition",poolPoints:"Points",admin:"Admin"},
+    tabs:{ranking:"Classement",matches:"Matchs",matches2:"Matchs 2",results:"Résultats",teams:"Équipes",competitions:"Toutes les compétitions",register:"Inscription",register2:"Inscription 2",edit:"Mon équipe",rules:"Règles",competition:"Compétition",poolPoints:"Points",admin:"Admin"},
     matches2Tab:{
       selectCompetition:"Compétition",
       noCompetitionsList:"Aucune compétition disponible.",
@@ -355,7 +429,7 @@ export const T = {
     timezoneInfo:"Horaires en fuseau:",changeTz:"Changer fuseau",groupLabel:"Groupe",playerNamePlaceholder:"Nom du joueur",fillPlayerNames:"Remplissez tous les noms",searchPlaceholder:"Rechercher équipe...",coachNamePlaceholder:"Nom du sélectionneur (p. ex. Didier Deschamps)",fillCoachName:"Entrez le nom du sélectionneur",duplicateEmail:"Cet e-mail est déjà enregistré. Une équipe par e-mail.",knockoutInfo:"Les matchs à élimination apparaîtront après la phase de groupes.",tbd:"À définir",unsaved:"Non enregistré",savingAutosave:"Enregistrement…",deadlineConfig:"Configurer date limite",deadlineDateLabel:"Date & heure",deadlineDisplayLabel:"Texte affiché",saveDeadline:"Enregistrer",confirmLogout:"Voulez-vous vraiment vous déconnecter de l'admin?",cancel:"Annuler",settings:"Paramètres",themeLabel:"Thème",darkTheme:"Sombre",lightTheme:"Clair",languageLabel:"Langue",timezoneLabel:"Fuseau horaire",adminLoggedIn:"Connecté en tant qu'admin",changeInSettings:"Modifier dans les paramètres ⚙️",edit:"Modifier",editTeam:"Modifier équipe",teamName:"Nom de l'équipe",userName:"Nom",system:"Système",fillRequired:"Remplissez tous les champs",choosePlayer:"Choisir joueur",chooseCoach:"Choisir sélectionneur",playerNameManual:"Nom (manuel)",rulesContent:{title:"Règles du jeu",intro:"Bienvenue dans le pool Coupe du Monde 2026! Vous trouverez ci-dessous comment ça marche et comment gagner des points.",howTitle:"Comment ça marche?",how1:"Inscrivez-vous avant la date limite.",how2:"Choisissez une formation (4-3-3, 4-4-2 ou 3-4-3).",how3:"Choisissez un pays pour chaque position. Chaque pays ne peut être choisi qu'une fois par personne.",how4:"Indiquez le nom du sélectionneur.",how5:"Pendant le tournoi vous gagnez des points selon les performances.",how6:"Celui qui a le plus de points à la fin gagne!",deadlineTitle:"Date limite",deadlineText:"Inscriptions jusqu'au:",deadlineNote:"Après cette date votre équipe ne peut plus être modifiée.",pointsTitle:"Système de points",pointsIntro:"Les points varient par position. Les attaquants gagnent plus pour les buts, les défenseurs pour les cleansheets.",eventCol:"Événement",evWin:"Match gagné (pays)",evDraw:"Match nul (pays)",evGoal:"But",evAssist:"Passe décisive",evClean:"Cleansheet",evPenalty:"Penalty arrêté",evOg:"But contre son camp",evYellow:"Carton jaune",ev2Yellow:"2 jaunes = rouge",evRed:"Carton rouge direct",evSub:"Remplacement réussi (but après remplacement)",evChampion:"Champion du Monde",rulesTitle:"Règles importantes",rule1:"Inscription avec une adresse email — une équipe par personne.",rule2:"Dans votre équipe, chaque pays ne peut apparaître qu'une fois.",rule3:"Les autres participants peuvent choisir le même pays.",rule4:"Après la date limite, votre équipe ne peut plus être modifiée.",rule5:"Les points sont mis à jour en continu par l'admin.",rule6:"En cas d'égalité, celui qui a le plus de buts de ses attaquants gagne.",prizesTitle:"Prix & contact",prizesText:"Les prix sont annoncés par l'organisateur. La mise et les paiements sont gérés séparément.",contactText:"Des questions? Contactez l'organisateur du pool.",privacyTitle:"Vie privée",privacyText:"Votre email est uniquement utilisé pour éviter les inscriptions en double et n'est pas partagé.",captainTitle:"Capitaine",captainText:"Vous choisissez un joueur comme capitaine. Si son pays est champion du monde, il gagne les points de champion comme vos autres joueurs de ce pays.",captainNote:"Votre capitaine apparaît avec un brassard orange. Choisissez judicieusement !",exampleTitle:"Équipe exemple (4-3-3)",exampleIntro:"Exemple valide : chaque pays une fois, capitaine avec brassard.",exampleNote:"Utiliser l'Argentine deux fois est une erreur — interdit.",mistakesTitle:"Erreurs courantes"}
   },
   pt: { title:"BOLÃO COPA 2026", subtitle:"USA • CANADA • MEXICO",
-    tabs:{ranking:"Classificação",matches:"Jogos",matches2:"Jogos 2",results:"Resultados",teams:"Times",competitions:"Todas as competições",register:"Inscrever",edit:"Meu time",rules:"Regras",competition:"Competição",poolPoints:"Pontos",admin:"Admin"},
+    tabs:{ranking:"Classificação",matches:"Jogos",matches2:"Jogos 2",results:"Resultados",teams:"Times",competitions:"Todas as competições",register:"Inscrever",register2:"Inscrever 2",edit:"Meu time",rules:"Regras",competition:"Competição",poolPoints:"Pontos",admin:"Admin"},
     matches2Tab:{
       selectCompetition:"Competição",
       noCompetitionsList:"Nenhuma competição disponível.",
@@ -386,7 +460,7 @@ export const T = {
     timezoneInfo:"Horários no fuso:",changeTz:"Mudar fuso",groupLabel:"Grupo",playerNamePlaceholder:"Nome do jogador",fillPlayerNames:"Preencha todos os nomes",searchPlaceholder:"Buscar time...",coachNamePlaceholder:"Nome do técnico (ex. Dorival Júnior)",fillCoachName:"Digite o nome do técnico",duplicateEmail:"Este email já está registrado. Um time por email.",knockoutInfo:"Os jogos do mata-mata aparecerão após a fase de grupos.",tbd:"A definir",unsaved:"Não salvo",savingAutosave:"Salvando…",deadlineConfig:"Configurar prazo",deadlineDateLabel:"Data e hora",deadlineDisplayLabel:"Texto exibido",saveDeadline:"Salvar prazo",confirmLogout:"Tem certeza de que deseja sair do painel admin?",cancel:"Cancelar"
   },
   ar: { title:"كأس العالم 2026", subtitle:"الولايات المتحدة • كندا • المكسيك",
-    tabs:{ranking:"الترتيب",matches:"المباريات",matches2:"المباريات 2",results:"النتائج",teams:"الفرق",competitions:"كل المسابقات",register:"التسجيل",edit:"فريقي",rules:"القواعد",competition:"المسابقة",poolPoints:"النقاط",admin:"الإدارة"},
+    tabs:{ranking:"الترتيب",matches:"المباريات",matches2:"المباريات 2",results:"النتائج",teams:"الفرق",competitions:"كل المسابقات",register:"التسجيل",register2:"التسجيل 2",edit:"فريقي",rules:"القواعد",competition:"المسابقة",poolPoints:"النقاط",admin:"الإدارة"},
     matches2Tab:{
       selectCompetition:"المسابقة",
       noCompetitionsList:"لا توجد مسابقات متاحة.",

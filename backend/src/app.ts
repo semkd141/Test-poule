@@ -66,9 +66,9 @@ export function createApp(deps: CreateAppDeps): express.Express {
   app.use(
     "/api/my-competitions",
     requireBearerSupabaseJwt(env),
-    createCompetitionOwnerRouter(gateway, env),
+    createCompetitionOwnerRouter(gateway, env, logger),
   );
-  app.use("/api/internal", optionalBearerSupabaseJwt(env), createInternalRouter(gateway, env));
+  app.use("/api/internal", optionalBearerSupabaseJwt(env), createInternalRouter(gateway, env, logger));
   app.use("/api", createParticipantsRouter(gateway, env, logger));
 
   app.use(notFoundHandler);

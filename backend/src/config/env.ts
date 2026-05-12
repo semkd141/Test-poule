@@ -20,7 +20,7 @@ const envSchema = z.object({
   SUPABASE_KEY: z.string().min(1, "SUPABASE_KEY is required"),
   /**
    * Service role JWT for PostgREST when the server must read/write any row (bypasses RLS).
-   * Required for reliable participant lookups (e.g. signup-by-email check) if `deelnemers` has RLS.
+   * Required for reliable participant lookups (e.g. signup-by-email check) if `teams` has RLS.
    * Dashboard → Project Settings → API → service_role (server-only; never expose to browsers).
    */
   SUPABASE_SERVICE_ROLE_KEY: z.preprocess(

@@ -4,7 +4,50 @@ import type { Env } from "../config/env.js";
 import type { AppLogger } from "../lib/logger.js";
 import { UpstreamHttpError } from "../shared/upstream-error.js";
 import { createSupabaseAdmin } from "./supabase-admin.js";
-import { defaultApiFootballSeasonForLeagueType } from "../league-type-resolve.js";
+import {
+  defaultApiFootballSeasonForLeagueType,
+  parseApiFootballSeasonYearFromSeasonLabel,
+} from "../league-type-resolve.js";
+import type { FixtureSquadMemberInsert } from "./fixture-squad-extract.js";
+
+/** Superadmin dashboard: aggregate DB metrics (see {@link SupabaseGateway.getAdminAnalyticsSnapshot}). */
+export type AdminAnalyticsSnapshot = {
+  generatedAt: string;
+  counts: {
+    competitions: number;
+    competitionsWithOwner: number;
+    competitionsPlatform: number;
+    teamsRegistered: number;
+    teamsLinkedToAuthUser: number;
+    competitionMembers: number;
+    invitesTotal: number;
+    invitesPending: number;
+    invitesAccepted: number;
+    fixtureMappings: number;
+    matches: number;
+    participantScoreEvents: number;
+    playerPointsRollupRows: number;
+    fixtureSquadMembers: number;
+    fixtureSquadFetched: number;
+    playerStatisticsRows: number;
+    apiFootballLeagueTypes: number;
+  };
+  topPoolsByTeamCount: Array<{
+    competition_id: number;
+    team_count: number;
+    name: string | null;
+    slug: string | null;
+    owner_user_id: string | null;
+  }>;
+  recentTeamRegistrations: Array<{
+    id: number;
+    competition_id: number;
+    email: string | null;
+    teamnaam: string | null;
+    naam: string | null;
+    created_at: string | null;
+  }>;
+};
 
 type FetchInit = RequestInit;
 
@@ -27,7 +70,7 @@ export class SupabaseGateway {
     this.authBase = `${base}/auth/v1`;
     if (!env.SUPABASE_SERVICE_ROLE_KEY) {
       this.log.warn(
-        "SUPABASE_SERVICE_ROLE_KEY is unset. With Row Level Security on `deelnemers`, PostgREST queries using only the anon/publishable SUPABASE_KEY may return zero rows for other users' emails — password signup will falsely say no team registration exists. Add the service_role key from Supabase Dashboard → API.",
+        "SUPABASE_SERVICE_ROLE_KEY is unset. With Row Level Security on `teams`, PostgREST queries using only the anon/publishable SUPABASE_KEY may return zero rows for other users' emails — password signup will falsely say no team registration exists. Add the service_role key from Supabase Dashboard → API.",
       );
     }
   }
@@ -284,11 +327,11 @@ export class SupabaseGateway {
     return data.user as unknown as Record<string, unknown>;
   }
 
-  /** Count non-config participants per competition (single query). */
+  /** Count non-config teams per competition (single query). */
   async fetchParticipantCountsByCompetition(): Promise<Map<number, number>> {
     const r = await this.request(
-      "db.deelnemers.competitionCounts",
-      `${this.dbBase}/deelnemers?email=not.eq.__config__&select=competition_id`,
+      "db.teams.competitionCounts",
+      `${this.dbBase}/teams?email=not.eq.__config__&select=competition_id`,
       { headers: this.serviceHeaders() },
     );
     const data = await this.parseSuccessBody(r);
@@ -303,12 +346,12 @@ export class SupabaseGateway {
     return map;
   }
 
-  // --- REST (deelnemers / wk_spelers) ---
+  // --- REST (teams / wk_spelers) — pool team rows; picks live in player_points_rollup + fixture_squad_members ---
 
   async listParticipants(): Promise<unknown> {
     const r = await this.request(
-      "db.deelnemers.list",
-      `${this.dbBase}/deelnemers?select=*&order=id`,
+      "db.teams.list",
+      `${this.dbBase}/teams?select=*&order=id`,
       { headers: this.serviceHeaders() },
     );
     return this.parseSuccessBody(r);
@@ -317,8 +360,8 @@ export class SupabaseGateway {
   async getParticipant(id: string): Promise<Record<string, unknown> | null> {
     const enc = encodeURIComponent(id);
     const r = await this.request(
-      "db.deelnemers.byId",
-      `${this.dbBase}/deelnemers?id=eq.${enc}&select=*&limit=1`,
+      "db.teams.byId",
+      `${this.dbBase}/teams?id=eq.${enc}&select=*&limit=1`,
       { headers: this.serviceHeaders() },
     );
     const data = await this.parseSuccessBody(r);
@@ -330,19 +373,19 @@ export class SupabaseGateway {
     const enc = encodeURIComponent(email.trim());
     // ilike = case-insensitive match (eq. on text is case-sensitive and breaks lookups vs registration casing)
     const r = await this.request(
-      "db.deelnemers.byEmail",
-      `${this.dbBase}/deelnemers?email=ilike.${enc}&email=not.eq.__config__&limit=1`,
+      "db.teams.byEmail",
+      `${this.dbBase}/teams?email=ilike.${enc}&email=not.eq.__config__&limit=1`,
       { headers: this.serviceHeaders() },
     );
     return this.parseSuccessBody(r);
   }
 
-  /** All participant rows for an email (multiple competitions). */
+  /** All team rows for an email (multiple competitions). */
   async findAllParticipantsByEmail(email: string): Promise<unknown> {
     const enc = encodeURIComponent(email.trim());
     const r = await this.request(
-      "db.deelnemers.byEmailAll",
-      `${this.dbBase}/deelnemers?email=ilike.${enc}&email=not.eq.__config__&select=*&order=id`,
+      "db.teams.byEmailAll",
+      `${this.dbBase}/teams?email=ilike.${enc}&email=not.eq.__config__&select=*&order=id`,
       { headers: this.serviceHeaders() },
     );
     return this.parseSuccessBody(r);
@@ -355,8 +398,8 @@ export class SupabaseGateway {
     const enc = encodeURIComponent(email.trim());
     const cid = encodeURIComponent(String(competitionId));
     const r = await this.request(
-      "db.deelnemers.byEmailCompetition",
-      `${this.dbBase}/deelnemers?email=ilike.${enc}&email=not.eq.__config__&competition_id=eq.${cid}&limit=1`,
+      "db.teams.byEmailCompetition",
+      `${this.dbBase}/teams?email=ilike.${enc}&email=not.eq.__config__&competition_id=eq.${cid}&limit=1`,
       { headers: this.serviceHeaders() },
     );
     return this.parseSuccessBody(r);
@@ -365,8 +408,8 @@ export class SupabaseGateway {
   async getCompetitionConfigRow(competitionId: string | number): Promise<Record<string, unknown> | null> {
     const enc = encodeURIComponent(String(competitionId));
     const r = await this.request(
-      "db.deelnemers.configByCompetition",
-      `${this.dbBase}/deelnemers?competition_id=eq.${enc}&email=eq.__config__&select=*&limit=1`,
+      "db.teams.configByCompetition",
+      `${this.dbBase}/teams?competition_id=eq.${enc}&email=eq.__config__&select=*&limit=1`,
       { headers: this.serviceHeaders() },
     );
     const data = await this.parseSuccessBody(r);
@@ -385,9 +428,187 @@ export class SupabaseGateway {
 
   async listParticipantsByCompetition(competitionId: number): Promise<unknown> {
     const r = await this.request(
-      "db.deelnemers.byCompetition",
-      `${this.dbBase}/deelnemers?competition_id=eq.${encodeURIComponent(String(competitionId))}&select=*&email=not.eq.__config__&order=id`,
+      "db.teams.byCompetition",
+      `${this.dbBase}/teams?competition_id=eq.${encodeURIComponent(String(competitionId))}&select=*&email=not.eq.__config__&order=id`,
       { headers: this.serviceHeaders() },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  /**
+   * All pool teams that picked this API-Football player for the competition's league + season
+   * (used after fixture goal stats sync to increment rollups in one query).
+   */
+  async listPlayerRollupsByCompetitionLeagueSeasonPlayer(
+    competitionId: number,
+    leagueId: number,
+    season: number,
+    playerId: number,
+  ): Promise<unknown> {
+    const cid = encodeURIComponent(String(Math.floor(competitionId)));
+    const lid = encodeURIComponent(String(Math.floor(leagueId)));
+    const sid = encodeURIComponent(String(Math.floor(season)));
+    const pid = encodeURIComponent(String(Math.floor(playerId)));
+    const sel = encodeURIComponent(
+      "id,competition_id,team_id,api_football_league_id,season,player_id,points,pos,is_captain",
+    );
+    const r = await this.request(
+      "db.player_points_rollup.byCompetitionLeagueSeasonPlayer",
+      `${this.dbBase}/player_points_rollup?competition_id=eq.${cid}&api_football_league_id=eq.${lid}&season=eq.${sid}&player_id=eq.${pid}&select=${sel}`,
+      { headers: this.serviceHeaders() },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  async listPlayerRollupsByTeamLeagueSeason(
+    teamId: number,
+    leagueId: number,
+    season: number,
+    orderBy: string = "player_id",
+  ): Promise<unknown> {
+    const tid = encodeURIComponent(String(teamId));
+    const lid = encodeURIComponent(String(leagueId));
+    const sid = encodeURIComponent(String(season));
+    const sel = encodeURIComponent(
+      "id,competition_id,team_id,api_football_league_id,season,player_id,pos,is_captain,points,created_at,updated_at",
+    );
+    const ord = encodeURIComponent(orderBy);
+    const r = await this.request(
+      "db.player_points_rollup.byTeamLeagueSeason",
+      `${this.dbBase}/player_points_rollup?team_id=eq.${tid}&api_football_league_id=eq.${lid}&season=eq.${sid}&select=${sel}&order=${ord}`,
+      { headers: this.serviceHeaders() },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  /** All squad lines for a league+season (multiple fixtures); caller dedupes by `player_id`. */
+  async listFixtureSquadMembersByLeagueSeason(leagueId: number, season: number): Promise<unknown> {
+    const lid = encodeURIComponent(String(Math.floor(leagueId)));
+    const sid = encodeURIComponent(String(Math.floor(season)));
+    const sel = encodeURIComponent("player_id,name,team,pos");
+    const r = await this.request(
+      "db.fixture_squad_members.byLeagueSeason",
+      `${this.dbBase}/fixture_squad_members?api_football_league_id=eq.${lid}&season=eq.${sid}&select=${sel}&limit=50000`,
+      { headers: this.serviceHeaders() },
+    );
+    return this.parseSuccessBody(r);
+  }
+
+  /** Distinct `team` (lineup side) labels for a player in a league+season (from fixture squads). */
+  async listFixtureSquadTeamsForPlayer(
+    playerId: number,
+    leagueId: number,
+    season: number,
+  ): Promise<string[]> {
+    const pid = encodeURIComponent(String(playerId));
+    const lid = encodeURIComponent(String(leagueId));
+    const sid = encodeURIComponent(String(season));
+    const r = await this.request(
+      "db.fixture_squad_members.teamsForPlayer",
+      `${this.dbBase}/fixture_squad_members?player_id=eq.${pid}&api_football_league_id=eq.${lid}&season=eq.${sid}&select=team`,
+      { headers: this.serviceHeaders() },
+    );
+    const data = await this.parseSuccessBody(r);
+    const out = new Set<string>();
+    if (!Array.isArray(data)) return [];
+    for (const row of data) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+      const t = (row as Record<string, unknown>).team;
+      if (typeof t === "string" && t.trim()) out.add(t.trim());
+    }
+    return [...out];
+  }
+
+  async deletePlayerRollupsByTeamLeagueSeason(
+    teamId: number,
+    leagueId: number,
+    season: number,
+  ): Promise<void> {
+    const tid = encodeURIComponent(String(teamId));
+    const lid = encodeURIComponent(String(leagueId));
+    const sid = encodeURIComponent(String(season));
+    const r = await this.request(
+      "db.player_points_rollup.deleteByTeamLeagueSeason",
+      `${this.dbBase}/player_points_rollup?team_id=eq.${tid}&api_football_league_id=eq.${lid}&season=eq.${sid}`,
+      { method: "DELETE", headers: this.serviceHeaders() },
+    );
+    await this.parseSuccessBody(r);
+  }
+
+  async insertPlayerRollupsBatch(
+    rows: Array<{
+      competition_id: number;
+      team_id: number;
+      api_football_league_id: number;
+      season: number;
+      player_id: number;
+      pos: string | null;
+      is_captain: boolean;
+      points: number;
+    }>,
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    const CHUNK = 100;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const slice = rows.slice(i, i + CHUNK);
+      const r = await this.request(
+        "db.player_points_rollup.insertBatch",
+        `${this.dbBase}/player_points_rollup`,
+        {
+          method: "POST",
+          headers: { ...this.serviceHeaders(), Prefer: "return=minimal" },
+          body: JSON.stringify(slice),
+        },
+      );
+      await this.parseSuccessBody(r);
+    }
+  }
+
+  async patchPlayerRollupById(id: string, body: { points: number }): Promise<void> {
+    const enc = encodeURIComponent(id);
+    const r = await this.request(
+      "db.player_points_rollup.patch",
+      `${this.dbBase}/player_points_rollup?id=eq.${enc}`,
+      {
+        method: "PATCH",
+        headers: { ...this.serviceHeaders(), Prefer: "return=minimal" },
+        body: JSON.stringify({ ...body, updated_at: new Date().toISOString() }),
+      },
+    );
+    await this.parseSuccessBody(r);
+  }
+
+  /** Recompute `teams.total_points` as the sum of rollup `points` for this team (all league/season rows). */
+  async recomputeTeamTotalPointsFromRollups(teamId: string): Promise<void> {
+    const tid = encodeURIComponent(teamId);
+    const r = await this.request(
+      "db.player_points_rollup.sumForTeam",
+      `${this.dbBase}/player_points_rollup?team_id=eq.${tid}&select=points`,
+      { headers: this.serviceHeaders() },
+    );
+    const data = await this.parseSuccessBody(r);
+    let sum = 0;
+    if (Array.isArray(data)) {
+      for (const row of data) {
+        if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+        sum += Number((row as Record<string, unknown>).points) || 0;
+      }
+    }
+    await this.patchTeamTotalPoints(teamId, sum);
+  }
+
+  async patchTeamTotalPoints(teamId: string, totalPoints: number): Promise<unknown> {
+    const r = await this.request(
+      "db.teams.patchTotalPoints",
+      `${this.dbBase}/teams?id=eq.${encodeURIComponent(teamId)}`,
+      {
+        method: "PATCH",
+        headers: { ...this.serviceHeaders(), Prefer: "return=minimal" },
+        body: JSON.stringify({
+          total_points: Math.floor(Number(totalPoints)) || 0,
+          updated_at: new Date().toISOString(),
+        }),
+      },
     );
     return this.parseSuccessBody(r);
   }
@@ -418,8 +639,10 @@ export class SupabaseGateway {
       metaLeague ?? (Number.isFinite(colLeague) && colLeague > 0 ? Math.floor(colLeague) : null);
     if (leagueId == null) return null;
     const metaSeason = this.metadataApiFootballSeason(comp.metadata);
+    const labelSeason = parseApiFootballSeasonYearFromSeasonLabel(comp.season_label);
     const lt = String(comp.league_type ?? "").trim();
     const season =
+      labelSeason ??
       metaSeason ??
       (lt ? defaultApiFootballSeasonForLeagueType(lt) : null);
     if (season == null || !Number.isFinite(season) || season <= 0) return null;
@@ -554,7 +777,7 @@ export class SupabaseGateway {
   }
 
   async listPlayerStatisticsByFixture(fixtureId: number): Promise<unknown> {
-    const sel = encodeURIComponent("land,speler_naam,punten,created_at");
+    const sel = encodeURIComponent("land,speler_naam,player_id,punten,created_at");
     const r = await this.request(
       "db.player_statistics.byFixture",
       `${this.dbBase}/player_statistics?fixture_id=eq.${encodeURIComponent(String(fixtureId))}&select=${sel}&order=land,speler_naam`,
@@ -573,7 +796,13 @@ export class SupabaseGateway {
   }
 
   async insertPlayerStatisticsBatch(
-    rows: Array<{ fixture_id: number; land: string; speler_naam: string; punten: number }>,
+    rows: Array<{
+      fixture_id: number;
+      land: string;
+      speler_naam: string;
+      player_id: number | null;
+      punten: number;
+    }>,
   ): Promise<void> {
     const CHUNK = 150;
     for (let i = 0; i < rows.length; i += CHUNK) {
@@ -782,9 +1011,12 @@ export class SupabaseGateway {
         ? { ...(body as Record<string, unknown>) }
         : {};
     delete row.competition_name;
+    delete row.spelers;
+    delete row.attacker_goals;
+    delete row.pool_registration_starts_at;
     const r = await this.request(
-      "db.deelnemers.insert",
-      `${this.dbBase}/deelnemers`,
+      "db.teams.insert",
+      `${this.dbBase}/teams`,
       {
         method: "POST",
         headers: { ...this.serviceHeaders(), Prefer: "return=representation" },
@@ -794,56 +1026,34 @@ export class SupabaseGateway {
     return this.parseSuccessBody(r);
   }
 
-  async patchParticipantPlayers(id: string, payload: Record<string, unknown>): Promise<unknown> {
-    const r = await this.request(
-      "db.deelnemers.patchPlayers",
-      `${this.dbBase}/deelnemers?id=eq.${id}`,
-      {
-        method: "PATCH",
-        headers: { ...this.serviceHeaders(), Prefer: "return=representation" },
-        body: JSON.stringify(payload),
-      },
-    );
-    return this.parseSuccessBody(r);
-  }
-
   async patchParticipant(id: string, body: unknown): Promise<unknown> {
+    const b =
+      typeof body === "object" && body !== null && !Array.isArray(body)
+        ? { ...(body as Record<string, unknown>) }
+        : {};
+    delete b.spelers;
+    delete b.attacker_goals;
     const r = await this.request(
-      "db.deelnemers.patch",
-      `${this.dbBase}/deelnemers?id=eq.${id}`,
+      "db.teams.patch",
+      `${this.dbBase}/teams?id=eq.${id}`,
       {
         method: "PATCH",
         headers: { ...this.serviceHeaders(), Prefer: "return=representation" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(b),
       },
     );
     return this.parseSuccessBody(r);
   }
 
-  async patchParticipantAggregates(
-    id: string,
-    totalPoints: number,
-    attackerGoals: number,
-  ): Promise<unknown> {
-    const r = await this.request(
-      "db.deelnemers.patchAggregates",
-      `${this.dbBase}/deelnemers?id=eq.${encodeURIComponent(id)}`,
-      {
-        method: "PATCH",
-        headers: { ...this.serviceHeaders(), Prefer: "return=minimal" },
-        body: JSON.stringify({
-          total_points: totalPoints,
-          attacker_goals: attackerGoals,
-        }),
-      },
-    );
-    return this.parseSuccessBody(r);
+  /** @deprecated Use rollup + recomputeTeamTotalPointsFromRollups; kept for scoring sync compatibility. */
+  async patchParticipantAggregates(id: string, totalPoints: number, _attackerGoals: number): Promise<unknown> {
+    return this.patchTeamTotalPoints(id, totalPoints);
   }
 
   async deleteParticipant(id: string): Promise<void> {
     await this.request(
-      "db.deelnemers.delete",
-      `${this.dbBase}/deelnemers?id=eq.${id}`,
+      "db.teams.delete",
+      `${this.dbBase}/teams?id=eq.${id}`,
       {
         method: "DELETE",
         headers: { ...this.serviceHeaders(), Prefer: "return=minimal" },
@@ -966,28 +1176,31 @@ export class SupabaseGateway {
 
   // --- Fixture squad (API-Football lineups + coaches) ---
 
-  /** Distinct `country` values already stored (any fixture); used to skip re-importing whole squads for that side. */
-  async listFixtureSquadMemberCountries(): Promise<Set<string>> {
-    const out = new Set<string>();
-    const pageSize = 1000;
-    let offset = 0;
-    for (;;) {
-      const r = await this.request(
-        "db.fixture_squad_members.countries",
-        `${this.dbBase}/fixture_squad_members?select=country&country=not.is.null&limit=${pageSize}&offset=${offset}`,
-        { headers: this.serviceHeaders() },
-      );
-      const data = await this.parseSuccessBody(r);
-      if (!Array.isArray(data) || data.length === 0) break;
-      for (const row of data) {
-        if (!row || typeof row !== "object" || Array.isArray(row)) continue;
-        const c = (row as Record<string, unknown>).country;
-        if (typeof c === "string" && c.trim()) out.add(c.trim());
-      }
-      if (data.length < pageSize) break;
-      offset += pageSize;
-    }
-    return out;
+  async hasFixtureSquadMembersForFixture(fixtureId: number): Promise<boolean> {
+    const fid = encodeURIComponent(String(fixtureId));
+    const r = await this.request(
+      "db.fixture_squad_members.byFixture",
+      `${this.dbBase}/fixture_squad_members?fixture_id=eq.${fid}&select=id&limit=1`,
+      { headers: this.serviceHeaders() },
+    );
+    const data = await this.parseSuccessBody(r);
+    return Array.isArray(data) && data.length > 0;
+  }
+
+  /** Any squad row for this API-Football league + season + lineup side name (`team`). */
+  async existsFixtureSquadLeagueSeasonTeam(leagueId: number, season: number, team: string): Promise<boolean> {
+    const t = team.trim();
+    if (!t) return false;
+    const lid = encodeURIComponent(String(Math.floor(leagueId)));
+    const sid = encodeURIComponent(String(Math.floor(season)));
+    const qTeam = encodeURIComponent(t);
+    const r = await this.request(
+      "db.fixture_squad_members.leagueSeasonTeam",
+      `${this.dbBase}/fixture_squad_members?api_football_league_id=eq.${lid}&season=eq.${sid}&team=eq.${qTeam}&select=id&limit=1`,
+      { headers: this.serviceHeaders() },
+    );
+    const data = await this.parseSuccessBody(r);
+    return Array.isArray(data) && data.length > 0;
   }
 
   async hasFixtureSquadFetched(fixtureId: number): Promise<boolean> {
@@ -1017,9 +1230,7 @@ export class SupabaseGateway {
     throw new UpstreamHttpError(r.status, payload);
   }
 
-  async insertFixtureSquadMembers(
-    rows: { fixture_id: number; name: string | null; country: string | null; player_id: number; pos: string | null }[],
-  ): Promise<void> {
+  async insertFixtureSquadMembers(rows: FixtureSquadMemberInsert[]): Promise<void> {
     if (rows.length === 0) return;
     const r = await fetch(`${this.dbBase}/fixture_squad_members`, {
       method: "POST",
@@ -1033,5 +1244,169 @@ export class SupabaseGateway {
     const payload = await this.parseJsonSafe(r);
     this.log.warn({ count: rows.length, status: r.status, payload }, "fixture_squad_members insert failed");
     throw new UpstreamHttpError(r.status, payload);
+  }
+
+  /**
+   * PostgREST exact row count (`HEAD` + `Prefer: count=exact`).
+   * Parses total from the `Content-Range` header (format ends with slash + row count).
+   * `query` is the path after `/rest/v1/`, e.g. `teams?select=id&email=not.eq.__config__`.
+   */
+  async postgrestCountExact(query: string): Promise<number> {
+    const q = query.replace(/^\//, "");
+    const url = `${this.dbBase}/${q}`;
+    try {
+      const r = await fetch(url, {
+        method: "HEAD",
+        headers: { ...this.serviceHeaders(), Prefer: "count=exact" },
+      });
+      const cr = r.headers.get("content-range") ?? r.headers.get("Content-Range") ?? "";
+      const m = String(cr).match(/\/(\d+)\s*$/);
+      const n = m && m[1] != null ? parseInt(m[1], 10) : 0;
+      if (!r.ok) {
+        this.log.warn({ url, status: r.status }, "postgrestCountExact upstream not ok");
+        return 0;
+      }
+      return Number.isFinite(n) && n >= 0 ? n : 0;
+    } catch (e) {
+      this.log.warn({ err: e, url }, "postgrestCountExact failed");
+      return 0;
+    }
+  }
+
+  /** Aggregated metrics for the superadmin Analytics panel (internal API only). */
+  async getAdminAnalyticsSnapshot(): Promise<AdminAnalyticsSnapshot> {
+    const [
+      competitions,
+      competitionsWithOwner,
+      competitionsPlatform,
+      teamsRegistered,
+      teamsLinkedToAuthUser,
+      competitionMembers,
+      invitesTotal,
+      invitesPending,
+      invitesAccepted,
+      fixtureMappings,
+      matches,
+      participantScoreEvents,
+      playerPointsRollupRows,
+      fixtureSquadMembers,
+      fixtureSquadFetched,
+      playerStatisticsRows,
+      apiFootballLeagueTypes,
+    ] = await Promise.all([
+      this.postgrestCountExact("competitions?select=id"),
+      this.postgrestCountExact("competitions?owner_user_id=not.is.null&select=id"),
+      this.postgrestCountExact("competitions?owner_user_id=is.null&select=id"),
+      this.postgrestCountExact("teams?email=not.eq.__config__&select=id"),
+      this.postgrestCountExact("teams?email=not.eq.__config__&user_id=not.is.null&select=id"),
+      this.postgrestCountExact("competition_members?select=competition_id"),
+      this.postgrestCountExact("competition_invites?select=id"),
+      this.postgrestCountExact("competition_invites?accepted_at=is.null&select=id"),
+      this.postgrestCountExact("competition_invites?accepted_at=not.is.null&select=id"),
+      this.postgrestCountExact("fixture_mappings?select=id"),
+      this.postgrestCountExact("matches?select=id"),
+      this.postgrestCountExact("participant_score_events?select=id"),
+      this.postgrestCountExact("player_points_rollup?select=id"),
+      this.postgrestCountExact("fixture_squad_members?select=id"),
+      this.postgrestCountExact("fixture_squad_fetched?select=fixture_id"),
+      this.postgrestCountExact("player_statistics?select=id"),
+      this.postgrestCountExact("api_football_league_lookup?select=league_type"),
+    ]);
+
+    const teamCountByComp = new Map<number, number>();
+    try {
+      const r = await this.request(
+        "db.analytics.teamsByCompetition",
+        `${this.dbBase}/teams?email=not.eq.__config__&select=competition_id&limit=50000`,
+        { headers: this.serviceHeaders() },
+      );
+      const rows = (await this.parseSuccessBody(r)) as unknown;
+      if (Array.isArray(rows)) {
+        for (const row of rows) {
+          if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+          const cid = Math.floor(Number((row as Record<string, unknown>).competition_id));
+          if (!Number.isFinite(cid) || cid <= 0) continue;
+          teamCountByComp.set(cid, (teamCountByComp.get(cid) ?? 0) + 1);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+
+    const compsRaw = await this.listCompetitions();
+    const comps = Array.isArray(compsRaw) ? compsRaw : [];
+    const topPoolsByTeamCount = comps
+      .map((c) => {
+        if (!c || typeof c !== "object" || Array.isArray(c)) return null;
+        const rec = c as Record<string, unknown>;
+        const id = Math.floor(Number(rec.id));
+        if (!Number.isFinite(id) || id <= 0) return null;
+        return {
+          competition_id: id,
+          team_count: teamCountByComp.get(id) ?? 0,
+          name: rec.name != null ? String(rec.name) : null,
+          slug: rec.slug != null ? String(rec.slug) : null,
+          owner_user_id:
+            rec.owner_user_id != null && String(rec.owner_user_id).trim()
+              ? String(rec.owner_user_id).trim()
+              : null,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x != null)
+      .sort((a, b) => b.team_count - a.team_count || a.competition_id - b.competition_id)
+      .slice(0, 15);
+
+    let recentTeamRegistrations: AdminAnalyticsSnapshot["recentTeamRegistrations"] = [];
+    try {
+      const sel = encodeURIComponent("id,competition_id,email,teamnaam,naam,created_at");
+      const r2 = await this.request(
+        "db.analytics.recentTeams",
+        `${this.dbBase}/teams?email=not.eq.__config__&select=${sel}&order=created_at.desc&limit=10`,
+        { headers: this.serviceHeaders() },
+      );
+      const tr = (await this.parseSuccessBody(r2)) as unknown;
+      if (Array.isArray(tr)) {
+        recentTeamRegistrations = tr
+          .filter((row) => row && typeof row === "object" && !Array.isArray(row))
+          .map((row) => {
+            const o = row as Record<string, unknown>;
+            return {
+              id: Math.floor(Number(o.id)) || 0,
+              competition_id: Math.floor(Number(o.competition_id)) || 0,
+              email: o.email != null ? String(o.email) : null,
+              teamnaam: o.teamnaam != null ? String(o.teamnaam) : null,
+              naam: o.naam != null ? String(o.naam) : null,
+              created_at: o.created_at != null ? String(o.created_at) : null,
+            };
+          });
+      }
+    } catch {
+      recentTeamRegistrations = [];
+    }
+
+    return {
+      generatedAt: new Date().toISOString(),
+      counts: {
+        competitions,
+        competitionsWithOwner,
+        competitionsPlatform,
+        teamsRegistered,
+        teamsLinkedToAuthUser,
+        competitionMembers,
+        invitesTotal,
+        invitesPending,
+        invitesAccepted,
+        fixtureMappings,
+        matches,
+        participantScoreEvents,
+        playerPointsRollupRows,
+        fixtureSquadMembers,
+        fixtureSquadFetched,
+        playerStatisticsRows,
+        apiFootballLeagueTypes,
+      },
+      topPoolsByTeamCount,
+      recentTeamRegistrations,
+    };
   }
 }

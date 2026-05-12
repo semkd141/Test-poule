@@ -32,7 +32,7 @@ export function participantMutationGate(gateway: SupabaseGateway, env: Env) {
       return;
     }
     const row = await gateway.getParticipant(id);
-    if (!row) throw new HttpError(404, "Participant not found");
+    if (!row) throw new HttpError(404, "Team not found");
     req.participantRow = row;
 
     const adminOk = Boolean(

@@ -16,6 +16,7 @@ import {
   shouldRedactSquadsBeforePoolStart,
 } from "../participant/competition-deadline.js";
 import { TransactionalEmailService } from "../services/transactional-email.js";
+import { startFixtureGoalRollupBackground } from "../services/fixture-goal-rollup-job.service.js";
 import { getOrSyncFixtureStatistics } from "../services/fixture-statistics.service.js";
 
 const emailQuerySchema = z.object({
@@ -51,9 +52,90 @@ function resolveJoinCompetitionId(req: Request): number {
   return n;
 }
 
-const patchPlayersSchema = z.object({
-  spelers: z.unknown(),
+const patchTeamRollupsSchema = z.object({
+  players: z.array(
+    z.object({
+      player_id: z.coerce.number().int().positive(),
+      pos: z.union([z.string(), z.null()]).optional(),
+      is_captain: z.boolean().optional(),
+      points: z.coerce.number().int().nonnegative().optional(),
+    }),
+  ),
 });
+
+export type SquadRosterPlayerPublic = {
+  player_id: number;
+  name: string | null;
+  team: string | null;
+  pos: string | null;
+};
+
+function pickRicherString(a: string | null, b: string | null): string | null {
+  const as = a != null && String(a).trim() ? String(a).trim() : "";
+  const bs = b != null && String(b).trim() ? String(b).trim() : "";
+  if (!as) return bs || null;
+  if (!bs) return as;
+  return bs.length > as.length ? bs : as;
+}
+
+/** One row per `player_id`; merge duplicates (multiple fixtures) preferring non-empty name/team/pos. */
+function dedupeFixtureSquadRoster(rows: Record<string, unknown>[]): SquadRosterPlayerPublic[] {
+  const map = new Map<number, SquadRosterPlayerPublic>();
+  for (const row of rows) {
+    const pid = Math.floor(Number(row.player_id));
+    if (!Number.isFinite(pid) || pid <= 0) continue;
+    const name = typeof row.name === "string" && row.name.trim() ? row.name.trim() : null;
+    const team = typeof row.team === "string" && row.team.trim() ? row.team.trim() : null;
+    const pos = typeof row.pos === "string" && row.pos.trim() ? row.pos.trim() : null;
+    const prev = map.get(pid);
+    if (!prev) {
+      map.set(pid, { player_id: pid, name, team, pos });
+      continue;
+    }
+    map.set(pid, {
+      player_id: pid,
+      name: pickRicherString(prev.name, name),
+      team: pickRicherString(prev.team, team),
+      pos: pickRicherString(prev.pos, pos),
+    });
+  }
+  return [...map.values()].sort((a, b) => a.player_id - b.player_id);
+}
+
+async function assertRollupPlayersAllowedForLeagueSeason(
+  gateway: SupabaseGateway,
+  leagueId: number,
+  season: number,
+  players: { player_id: number }[],
+): Promise<void> {
+  const raw = await gateway.listFixtureSquadMembersByLeagueSeason(leagueId, season);
+  const roster = dedupeFixtureSquadRoster(asRows(raw));
+  if (roster.length === 0) {
+    throw new HttpError(400, "No squad data loaded for this pool yet (fixture squads). Ask the organizer to fetch squads.");
+  }
+  const allowed = new Set(roster.map((r) => r.player_id));
+  const teamByPlayer = new Map(roster.map((r) => [r.player_id, r.team ?? ""]));
+
+  const ids = players.map((p) => Math.floor(Number(p.player_id)));
+  if (ids.some((id) => !Number.isFinite(id) || id <= 0)) {
+    throw new HttpError(400, "Invalid player_id in squad");
+  }
+  if (new Set(ids).size !== ids.length) {
+    throw new HttpError(400, "Duplicate player_id in squad");
+  }
+  for (const id of ids) {
+    if (!allowed.has(id)) {
+      throw new HttpError(400, "One or more players are not in the official squad data for this pool");
+    }
+  }
+  const teamKeys = ids.map((id) => {
+    const c = String(teamByPlayer.get(id) ?? "").trim().toLowerCase();
+    return c || `__p${id}`;
+  });
+  if (new Set(teamKeys).size !== teamKeys.length) {
+    throw new HttpError(400, "Each national team may only appear once in your squad");
+  }
+}
 
 function asObjectBody(raw: unknown): Record<string, unknown> {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
@@ -91,6 +173,8 @@ export type ParticipantsHandlers = {
   patchParticipant: ReturnType<typeof asyncHandler>;
   deleteParticipant: ReturnType<typeof asyncHandler>;
   postCompetitionFixtureStatistics: ReturnType<typeof asyncHandler>;
+  listPublicCompetitionSquadRoster: ReturnType<typeof asyncHandler>;
+  listParticipantPlayerRollups: ReturnType<typeof asyncHandler>;
 };
 
 function isAdminBySecret(req: Request, env: Env): boolean {
@@ -143,25 +227,11 @@ function slimPublicCreator(user: Record<string, unknown> | null): {
   return { id: id.trim(), email, full_name };
 }
 
-function parseSpelers(raw: unknown): Record<string, unknown>[] {
-  if (Array.isArray(raw)) return raw.filter((x) => x && typeof x === "object") as Record<string, unknown>[];
-  if (typeof raw === "string") {
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      return Array.isArray(parsed)
-        ? parsed.filter((x) => x && typeof x === "object") as Record<string, unknown>[]
-        : [];
-    } catch {
-      return [];
-    }
-  }
-  return [];
-}
-
-function totalPointsFromSpelers(raw: unknown): number {
-  return parseSpelers(raw).reduce((sum, sp) => sum + (Number(sp.punten) || 0), 0);
-}
-
+/**
+ * Owner-created pools (`owner_user_id` set): only users with a `competition_members` row may register a team.
+ * Membership is recorded via POST /participants/join (e.g. from the public pool list) or POST /invites/accept.
+ * Platform pools (`owner_user_id` null) use the same join endpoint without an invite.
+ */
 async function assertMayRegisterInOwnedCompetition(
   gateway: SupabaseGateway,
   body: Record<string, unknown>,
@@ -179,22 +249,37 @@ async function assertMayRegisterInOwnedCompetition(
   if (owner == null || owner === undefined) return;
   const uid = jwt?.sub;
   if (!uid || typeof uid !== "string") throw new HttpError(401, "Authorization required");
-  if (String(owner) === uid) return;
   const isMember = await gateway.isCompetitionMember(competitionId, uid);
   if (!isMember) {
     throw new HttpError(
       403,
-      "Use the invitation link sent to your email and sign in with that address before registering for this pool.",
+      "Join this pool first (Participate → pool list, or the invitation link in your email), then register your team.",
     );
   }
 }
 
-function attackerGoalsFromSpelers(raw: unknown): number {
-  return parseSpelers(raw).reduce((sum, sp) => {
-    const pos = String(sp.positie ?? "").toLowerCase();
-    const isAtt = pos === "att" || pos === "aanvaller" || pos === "forward" || pos === "striker";
-    return sum + (isAtt ? Number(sp.goals) || 0 : 0);
-  }, 0);
+/** Legacy JSON `spelers` on create/patch → `teams.registration_deadline_*` (no JSON stored on teams). */
+function mergeSpelersDeadlineIntoTeamPayload(payload: Record<string, unknown>): void {
+  const sp = payload.spelers;
+  if (sp === undefined) return;
+  let cfg: Record<string, unknown> | null = null;
+  if (typeof sp === "string") {
+    try {
+      const p = JSON.parse(sp) as unknown;
+      cfg = p && typeof p === "object" && !Array.isArray(p) ? (p as Record<string, unknown>) : null;
+    } catch {
+      cfg = null;
+    }
+  } else if (sp && typeof sp === "object" && !Array.isArray(sp)) {
+    cfg = sp as Record<string, unknown>;
+  }
+  if (cfg?.deadline !== undefined && cfg.deadline !== null && String(cfg.deadline).trim()) {
+    payload.registration_deadline_at = String(cfg.deadline);
+  }
+  if (cfg?.deadlineLabel !== undefined && cfg.deadlineLabel !== null && String(cfg.deadlineLabel).trim()) {
+    payload.registration_deadline_label = String(cfg.deadlineLabel).trim();
+  }
+  delete payload.spelers;
 }
 
 /** Public summary shape for registerable pools (no `creator` enrichment). */
@@ -241,6 +326,7 @@ function mapCompetitionRowToPublicSummary(
 }
 
 function redactForPublicSummary(row: Record<string, unknown>): Record<string, unknown> {
+  const totalPoints = Number(row.total_points ?? 0) || 0;
   return {
     id: row.id,
     naam: row.naam,
@@ -248,7 +334,7 @@ function redactForPublicSummary(row: Record<string, unknown>): Record<string, un
     systeem: row.systeem,
     competition_id: row.competition_id,
     spelers: [],
-    totalPoints: totalPointsFromSpelers(row.spelers),
+    totalPoints,
     hiddenBeforeDeadline: true,
   };
 }
@@ -312,21 +398,13 @@ export function createParticipantsHandlers(
       const data = await gateway.listParticipants();
       const rows = asRows(data).filter((r) => r.email !== "__config__");
       const withScores = rows.map((r) => {
-        const fallbackTotal = totalPointsFromSpelers(r.spelers);
-        const totalPoints = Number(r.total_points ?? fallbackTotal) || 0;
-        const picks = parseSpelers(r.spelers);
-        const attackerGoalsFallback = picks.reduce((sum, sp) => {
-          const pos = String(sp.positie ?? "").toLowerCase();
-          const isAtt = pos === "att" || pos === "aanvaller" || pos === "forward" || pos === "striker";
-          return sum + (isAtt ? Number(sp.goals) || 0 : 0);
-        }, 0);
-        const attackerGoals = Number(r.attacker_goals ?? attackerGoalsFallback) || 0;
+        const totalPoints = Number(r.total_points ?? 0) || 0;
         return {
           id: r.id,
           naam: r.naam,
           teamnaam: r.teamnaam,
           total_points: totalPoints,
-          attacker_goals: attackerGoals,
+          attacker_goals: 0,
         };
       });
       withScores.sort((a, b) => {
@@ -453,6 +531,22 @@ export function createParticipantsHandlers(
       res.json(out);
     }),
 
+    /** Distinct players from `fixture_squad_members` for this pool's API-Football league + season (picker data). */
+    listPublicCompetitionSquadRoster: asyncHandler(async (req: Request, res: Response) => {
+      const parsed = competitionIdParamSchema.safeParse(req.params);
+      if (!parsed.success) throw new HttpError(400, "Invalid competition id");
+      const competitionId = parsed.data.competitionId;
+      const comp = await gateway.getCompetitionById(String(competitionId));
+      if (!comp) throw new HttpError(404, "Competition not found");
+      const scope = gateway.getFixtureMappingScopeForCompetition(comp as Record<string, unknown>);
+      if (!scope) {
+        res.json([]);
+        return;
+      }
+      const raw = await gateway.listFixtureSquadMembersByLeagueSeason(scope.leagueId, scope.season);
+      res.json(dedupeFixtureSquadRoster(asRows(raw)));
+    }),
+
     postCompetitionFixtureStatistics: asyncHandler(async (req: Request, res: Response) => {
       const parsed = competitionIdParamSchema.safeParse(req.params);
       if (!parsed.success) throw new HttpError(400, "Invalid competition id");
@@ -466,6 +560,26 @@ export function createParticipantsHandlers(
         parsed.data.competitionId,
         body.data.fixtureId,
       );
+      if (out.source === "api_football") {
+        const m = out.match as Record<string, unknown> | undefined;
+        const mid = m?.id != null ? Number(m.id) : NaN;
+        if (Number.isFinite(mid) && mid > 0) {
+          startFixtureGoalRollupBackground(
+            {
+              competitionId: parsed.data.competitionId,
+              externalFixtureId: body.data.fixtureId,
+              matchId: mid,
+            },
+            gateway,
+            log,
+          );
+        } else {
+          log.warn(
+            { competitionId: parsed.data.competitionId, fixtureId: body.data.fixtureId },
+            "fixture statistics synced from API but match row has no id; skipping goal rollup job",
+          );
+        }
+      }
       res.json(out);
     }),
 
@@ -493,18 +607,11 @@ export function createParticipantsHandlers(
       if (!uid || typeof uid !== "string") throw new HttpError(401, "Authorization required");
 
       const memberIds = await gateway.listCompetitionMemberIdsForUser(uid);
-      const ownedRaw = await gateway.listCompetitionsByOwner(uid);
-      const ownedRows = asRows(ownedRaw);
-      const ownedIdSet = new Set<number>();
-      for (const row of ownedRows) {
-        const id = Number(row.id);
-        if (Number.isFinite(id) && id > 0) ownedIdSet.add(id);
-      }
 
-      /** Register tab: only pools the user joined (invite / public join), not pools they created. */
+      /** Register tab: pools you are a member of, excluding pools you organize (participant view). */
       const idSet = new Set<number>();
       for (const mid of memberIds) {
-        if (Number.isFinite(mid) && mid > 0 && !ownedIdSet.has(mid)) idSet.add(mid);
+        if (Number.isFinite(mid) && mid > 0) idSet.add(mid);
       }
 
       const allIds = [...idSet];
@@ -512,14 +619,16 @@ export function createParticipantsHandlers(
         allIds.length === 0 ? [] : await gateway.listCompetitionsByIds(allIds);
       const rows = asRows(raw);
       const counts = await gateway.fetchParticipantCountsByCompetition();
-      const out = rows.map((r) => mapCompetitionRowToPublicSummary(r, counts));
+      const out = rows
+        .map((r) => mapCompetitionRowToPublicSummary(r, counts))
+        .filter((c) => String(c.owner_user_id ?? "") !== uid);
       out.sort((a, b) => Number(a.id) - Number(b.id));
       res.json(out);
     }),
 
     /**
-     * Pools relevant for My Team: `competition_members`, pools you own, or where you already have a deelnemer row.
-     * Not the full public catalogue.
+     * Pools relevant for My Team: `competition_members`, pools you own, or where you already have a team row.
+     * Not the full public catalogue. (Register tab uses `registerable-competitions`, which omits pools you organize.)
      */
     listMyTeamCompetitions: asyncHandler(async (req: Request, res: Response) => {
       const jwt = req.supabaseUser;
@@ -565,8 +674,9 @@ export function createParticipantsHandlers(
     }),
 
     /**
-     * Records `competition_members` for the signed-in user so they may create a team
-     * (required for owner-created pools; idempotent for platform pools and after invites).
+     * Records `competition_members` so the signed-in user may register a team.
+     * Works for platform pools and organizer-owned pools listed publicly; organizer cannot join their own pool here.
+     * Invite links still use POST /invites/accept (sets `invite_id` and validates email).
      */
     joinCompetition: asyncHandler(async (req: Request, res: Response) => {
       const competitionId = resolveJoinCompetitionId(req);
@@ -576,6 +686,14 @@ export function createParticipantsHandlers(
 
       const comp = await gateway.getCompetitionById(String(competitionId));
       if (!comp) throw new HttpError(404, "Competition not found");
+      const owner = (comp as Record<string, unknown>).owner_user_id;
+      const ownerStr = owner != null && owner !== undefined ? String(owner).trim() : "";
+      if (ownerStr && ownerStr === uid) {
+        throw new HttpError(
+          403,
+          "This is a pool you created. Use the Competition tab to manage it—you cannot join it here as a player.",
+        );
+      }
       if (isRegistrationClosedByPoolStart(comp)) {
         throw new HttpError(403, "This pool has already started. Registration is closed.");
       }
@@ -669,12 +787,35 @@ export function createParticipantsHandlers(
         if (typeof n === "string" && n.trim()) competitionName = n.trim();
       }
       if (!competitionName) competitionName = "WK 2026 Poule";
+      const poolStartsAt =
+        typeof body.pool_registration_starts_at === "string" && body.pool_registration_starts_at.trim()
+          ? body.pool_registration_starts_at.trim()
+          : null;
       const insertPayload = { ...body };
       delete insertPayload.competition_name;
       delete insertPayload.competitionId;
+      delete insertPayload.pool_registration_starts_at;
       insertPayload.competition_id = resolvedCompetitionId;
       if (typeof insertPayload.email === "string") insertPayload.email = emailNorm;
+      mergeSpelersDeadlineIntoTeamPayload(insertPayload);
       const data = await gateway.createParticipant(insertPayload);
+      if (poolStartsAt) {
+        const rawStart = (compRow as Record<string, unknown>).starts_at;
+        const unset =
+          rawStart === undefined || rawStart === null || String(rawStart).trim() === "";
+        if (unset) {
+          const d = new Date(poolStartsAt);
+          if (!Number.isNaN(d.getTime())) {
+            try {
+              await gateway.patchCompetition(String(resolvedCompetitionId), {
+                starts_at: d.toISOString(),
+              });
+            } catch {
+              /* non-blocking: team row still created */
+            }
+          }
+        }
+      }
       if (typeof body.email === "string" && body.email.trim()) {
         try {
           await mailer.sendSignupConfirmation(body.email.trim(), competitionName);
@@ -685,21 +826,82 @@ export function createParticipantsHandlers(
       res.json(data);
     }),
 
+    listParticipantPlayerRollups: asyncHandler(async (req: Request, res: Response) => {
+      const params = idParamSchema.safeParse(req.params);
+      if (!params.success) throw new HttpError(400, "Invalid id");
+      const team = req.participantRow as Record<string, unknown> | undefined;
+      if (!team) throw new HttpError(404, "Team not found");
+      const cid = Number(team.competition_id);
+      if (!Number.isFinite(cid) || cid <= 0) throw new HttpError(500, "Invalid team competition_id");
+      const comp = await gateway.getCompetitionById(String(cid));
+      if (!comp) throw new HttpError(404, "Competition not found");
+      const scope = gateway.getFixtureMappingScopeForCompetition(comp as Record<string, unknown>);
+      if (!scope) {
+        res.json([]);
+        return;
+      }
+      const teamId = Number(team.id);
+      if (!Number.isFinite(teamId) || teamId <= 0) throw new HttpError(500, "Invalid team id");
+      const raw = await gateway.listPlayerRollupsByTeamLeagueSeason(
+        teamId,
+        scope.leagueId,
+        scope.season,
+        "created_at.asc",
+      );
+      res.json(Array.isArray(raw) ? raw : []);
+    }),
+
     patchParticipantPlayers: asyncHandler(async (req: Request, res: Response) => {
       const params = idParamSchema.safeParse(req.params);
       if (!params.success) throw new HttpError(400, "Invalid id");
 
-      const body = patchPlayersSchema.safeParse(req.body);
-      if (!body.success) throw new HttpError(400, "spelers field required");
+      const body = patchTeamRollupsSchema.safeParse(req.body ?? {});
+      if (!body.success) {
+        throw new HttpError(400, body.error.issues.map((i) => i.message).join("; "));
+      }
 
-      const payload = sanitizePatchBody(req, { spelers: body.data.spelers });
-      const data = await gateway.patchParticipantPlayers(params.data.id, payload);
-      const updatedRow = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
-      const spelersSource = updatedRow?.spelers ?? body.data.spelers;
-      const totalPoints = totalPointsFromSpelers(spelersSource);
-      const attackerGoals = attackerGoalsFromSpelers(spelersSource);
-      await gateway.patchParticipantAggregates(params.data.id, totalPoints, attackerGoals);
-      res.json(data);
+      const team = await gateway.getParticipant(params.data.id);
+      if (!team) throw new HttpError(404, "Team not found");
+      const cid = Number(team.competition_id);
+      if (!Number.isFinite(cid) || cid <= 0) throw new HttpError(500, "Invalid team competition_id");
+
+      const comp = await gateway.getCompetitionById(String(cid));
+      if (!comp) throw new HttpError(404, "Competition not found");
+      const scope = gateway.getFixtureMappingScopeForCompetition(comp as Record<string, unknown>);
+      if (!scope) {
+        throw new HttpError(
+          400,
+          "Pool has no API-Football league/season; cannot save player rollups (set competition metadata).",
+        );
+      }
+
+      const teamId = Number(team.id);
+      if (!Number.isFinite(teamId) || teamId <= 0) throw new HttpError(500, "Invalid team id");
+
+      await assertRollupPlayersAllowedForLeagueSeason(
+        gateway,
+        scope.leagueId,
+        scope.season,
+        body.data.players,
+      );
+
+      await gateway.deletePlayerRollupsByTeamLeagueSeason(teamId, scope.leagueId, scope.season);
+
+      const rows = body.data.players.map((p) => ({
+        competition_id: cid,
+        team_id: teamId,
+        api_football_league_id: scope.leagueId,
+        season: scope.season,
+        player_id: p.player_id,
+        pos: p.pos != null ? String(p.pos) : null,
+        is_captain: Boolean(p.is_captain),
+        points: p.points !== undefined ? Math.floor(Number(p.points)) : 0,
+      }));
+      await gateway.insertPlayerRollupsBatch(rows);
+      await gateway.recomputeTeamTotalPointsFromRollups(params.data.id);
+
+      const data = await gateway.getParticipant(params.data.id);
+      res.json(data ?? { id: params.data.id });
     }),
 
     patchParticipant: asyncHandler(async (req: Request, res: Response) => {
@@ -707,6 +909,7 @@ export function createParticipantsHandlers(
       if (!params.success) throw new HttpError(400, "Invalid id");
 
       const base = asObjectBody(req.body);
+      mergeSpelersDeadlineIntoTeamPayload(base);
       const merged = sanitizePatchBody(req, base);
       const data = await gateway.patchParticipant(params.data.id, merged);
       res.json(data);
