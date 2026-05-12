@@ -8,6 +8,7 @@ import {
   listPublicCompetitions,
   queueRegisterForCompetition,
 } from "../../../lib/wk/api-client";
+import { toastError } from "../../../lib/wk/toast";
 
 function fmtWhen(iso, tz) {
   if (!iso) return "—";
@@ -18,6 +19,12 @@ function fmtWhen(iso, tz) {
   } catch {
     return "—";
   }
+}
+
+function formatJoinErrorMessage(raw) {
+  var s = String(raw || "");
+  var t = s.replace(/^\(\d+\)\s*/, "").trim();
+  return t || s;
 }
 
 function registrationLooksOpen(c) {
@@ -154,10 +161,6 @@ export function AllCompetitionsTab() {
                   <dd style={{ margin: 0 }}>{fmtWhen(c.starts_at, tz)}</dd>
                   <dt style={{ color: "var(--fg-muted)" }}>{tc.created || "Pool created"}</dt>
                   <dd style={{ margin: 0 }}>{fmtWhen(c.created_at, tz)}</dd>
-                  <dt style={{ color: "var(--fg-muted)" }}>{tc.poolId || "Pool id"}</dt>
-                  <dd style={{ margin: 0 }}>
-                    <code>{c.id}</code>
-                  </dd>
                 </dl>
                 {/* {c.metadata && typeof c.metadata === "object" && Object.keys(c.metadata).length > 0 ? (
                   <div style={{ marginTop: 8 }}>
@@ -212,14 +215,33 @@ export function AllCompetitionsTab() {
                           setTab("register");
                           return;
                         }
+                        var myId =
+                          sess.user && sess.user.id != null && String(sess.user.id).trim()
+                            ? String(sess.user.id).trim()
+                            : "";
+                        var ownerRaw = c.owner_user_id;
+                        var ownerId =
+                          ownerRaw != null && String(ownerRaw).trim() ? String(ownerRaw).trim() : "";
+                        if (myId && ownerId && myId === ownerId) {
+                          var ownMsg =
+                            tc.joinOwnPoolError ||
+                            "This is a pool you created. Manage it under Competition—you can’t join it here as a player.";
+                          toastError(ownMsg);
+                          setJoinErrById(function(prev) {
+                            return Object.assign({}, prev, { [c.id]: ownMsg });
+                          });
+                          return;
+                        }
                         setJoinBusyId(idNum);
                         try {
                           await joinCompetition(idNum);
                           setTab("register");
                         } catch (e) {
+                          var errText = formatJoinErrorMessage(e && e.message ? e.message : e);
+                          toastError(errText);
                           setJoinErrById(function(prev) {
                             return Object.assign({}, prev, {
-                              [c.id]: String(e && e.message ? e.message : e),
+                              [c.id]: errText,
                             });
                           });
                         } finally {

@@ -17,7 +17,7 @@ const url = `${base}/fixtures`;
 
 const params = {
   league: 1,
-  season: 2026,
+  season: 2022,
 };
 
 /**

@@ -11,6 +11,8 @@ export function numOrNull(v: unknown): number | null {
 export type SlimPlayerRow = {
   land: string | null;
   spelerNaam: string | null;
+  /** API-Football `player.id` when present. */
+  playerId: number | null;
   punten: number;
 };
 
@@ -31,10 +33,11 @@ export function extractPlayersFromApiFixtureItem(item: unknown): SlimPlayerRow[]
 
     for (const row of plist) {
       const r = row as {
-        player?: { name?: unknown };
+        player?: { name?: unknown; id?: unknown };
         statistics?: unknown[];
       };
       const spelerNaam = r.player?.name != null ? String(r.player.name) : null;
+      const playerId = numOrNull(r.player?.id);
       const stats = Array.isArray(r.statistics) ? r.statistics[0] : null;
       const st = stats as { goals?: { total?: unknown }; penalty?: { scored?: unknown } } | null;
       const gstat = st?.goals ?? {};
@@ -45,6 +48,7 @@ export function extractPlayersFromApiFixtureItem(item: unknown): SlimPlayerRow[]
       out.push({
         land,
         spelerNaam,
+        playerId,
         punten,
       });
     }
@@ -110,16 +114,32 @@ export function matchUpsertBodyFromApiFixtureItem(
 export function playerStatisticsRowsFromSlim(
   fixtureId: number,
   slimPlayers: SlimPlayerRow[],
-): Array<{ fixture_id: number; land: string; speler_naam: string; punten: number }> {
-  const out: Array<{ fixture_id: number; land: string; speler_naam: string; punten: number }> = [];
+): Array<{
+  fixture_id: number;
+  land: string;
+  speler_naam: string;
+  player_id: number | null;
+  punten: number;
+}> {
+  const out: Array<{
+    fixture_id: number;
+    land: string;
+    speler_naam: string;
+    player_id: number | null;
+    punten: number;
+  }> = [];
   for (const p of slimPlayers) {
     const land = p.land != null && String(p.land).trim() ? String(p.land).trim() : "";
     const name = p.spelerNaam != null && String(p.spelerNaam).trim() ? String(p.spelerNaam).trim() : "";
     if (!land || !name) continue;
+    const pid = p.playerId;
+    const player_id =
+      pid != null && Number.isFinite(pid) && pid > 0 ? Math.floor(Number(pid)) : null;
     out.push({
       fixture_id: fixtureId,
       land,
       speler_naam: name,
+      player_id,
       punten: Number.isFinite(Number(p.punten)) ? Math.floor(Number(p.punten)) : 0,
     });
   }

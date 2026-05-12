@@ -485,6 +485,33 @@ export function RegisterTab() {
         toevoegenPayload.competition_id = dupCompId;
         toevoegenPayload.competition_name = crow && crow.name ? String(crow.name) : "Pool";
       }
+      var poolStartsIso = null;
+      if (
+        registeringForInvite &&
+        inviteRegistration &&
+        typeof inviteRegistration.registration_deadline === "string" &&
+        inviteRegistration.registration_deadline.trim()
+      ) {
+        poolStartsIso = inviteRegistration.registration_deadline.trim();
+      } else if (!registeringForInvite) {
+        var crowDeadline = publicComps.find(function(c) {
+          return Number(c.id) === Number(dupCompId);
+        });
+        if (
+          crowDeadline &&
+          typeof crowDeadline.registration_deadline === "string" &&
+          crowDeadline.registration_deadline.trim()
+        ) {
+          poolStartsIso = crowDeadline.registration_deadline.trim();
+        } else {
+          var sdead = readSelectedCompetition();
+          if (sdead && typeof sdead.registration_deadline === "string" && sdead.registration_deadline.trim()) {
+            poolStartsIso = sdead.registration_deadline.trim();
+          }
+        }
+      }
+      if (!poolStartsIso && config.deadline) poolStartsIso = config.deadline.toISOString();
+      if (poolStartsIso) toevoegenPayload.pool_registration_starts_at = poolStartsIso;
       await dbToevoegen(toevoegenPayload);
       setSuccess(true);
       if (registeringForInvite && typeof clearInviteRegistration === "function") {
@@ -568,8 +595,24 @@ export function RegisterTab() {
               <p style={{fontSize:15,fontWeight:700,marginBottom:8,color:"var(--fg)"}}>
                 {t.registerNoPoolsTitle || "You're not in any pool yet"}
               </p>
-              <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:16,lineHeight:1.6}}>
+              <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:12,lineHeight:1.6}}>
                 {t.registerNoPoolsBody || "Create a pool or join a public competition first."}
+              </p>
+              <p
+                style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: "#DC2626",
+                  marginBottom: 16,
+                  lineHeight: 1.55,
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(220, 38, 38, 0.45)",
+                  background: "rgba(220, 38, 38, 0.08)",
+                }}
+              >
+                {t.registerNoPoolsOwnPoolWarning ||
+                  "You cannot register a team in a competition you created yourself—only people who join via your email invitation can register a team there."}
               </p>
               <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
                 <button type="button" className="btn" onClick={function(){ setTab("competition"); }}>
@@ -584,7 +627,7 @@ export function RegisterTab() {
             <React.Fragment>
               <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:14,lineHeight:1.6}}>
                 {t.registerStep1Intro ||
-                  "Choose the pool for your team. Only pools you belong to or manage."}
+                  "Choose the pool for your team. Only pools you joined (for example after an invitation)—not pools you created yourself."}
               </p>
               <label style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>
                 {t.competitionTab?.title || "Competition"}

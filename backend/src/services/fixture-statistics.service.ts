@@ -13,6 +13,8 @@ import {
 export type FixtureStatisticsPlayer = {
   land: string;
   speler_naam: string;
+  /** API-Football `players.id` when stored; null for legacy rows or missing upstream id. */
+  player_id: number | null;
   punten: number;
 };
 
@@ -28,9 +30,13 @@ function asPlayerRows(raw: unknown): FixtureStatisticsPlayer[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((r) => {
     const row = r as Record<string, unknown>;
+    const pid = row.player_id;
+    const player_id =
+      pid != null && Number.isFinite(Number(pid)) && Number(pid) > 0 ? Math.floor(Number(pid)) : null;
     return {
       land: row.land != null ? String(row.land) : "",
       speler_naam: row.speler_naam != null ? String(row.speler_naam) : "",
+      player_id,
       punten: Number(row.punten) || 0,
     };
   });
