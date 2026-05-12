@@ -20,6 +20,11 @@ export interface CreateAppDeps {
   gateway: SupabaseGateway;
 }
 
+const corsAllowedOrigins = new Set([
+  "https://testpoule.vercel.app",
+  "https://test-poule.vercel.app",
+]);
+
 export function createApp(deps: CreateAppDeps): express.Express {
   const { env, logger, gateway } = deps;
 
@@ -44,7 +49,21 @@ export function createApp(deps: CreateAppDeps): express.Express {
     }),
   );
 
-  app.use(cors());
+  app.use(
+    cors({
+      origin(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
+        if (!origin) {
+          callback(null, true);
+          return;
+        }
+        if (corsAllowedOrigins.has(origin)) {
+          callback(null, true);
+          return;
+        }
+        callback(null, false);
+      },
+    }),
+  );
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/", (_req, res) => {
