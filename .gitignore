@@ -1,3 +1,6 @@
+# --- Local tooling venvs ---
+.venv-docx/
+
 # --- Dependencies ---
 node_modules/
 /jspm_packages/
