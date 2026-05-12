@@ -158,7 +158,7 @@ export function RankingTab() {
               if (c.slug && c.slug !== label) label = label + " (" + c.slug + ")";
               return (
                 <option key={String(c.id)} value={String(c.id)}>
-                  {label} · id {c.id}
+                  {label}
                 </option>
               );
             })}
@@ -170,7 +170,7 @@ export function RankingTab() {
             <div>{rTab.emptyForPool || t.noParticipants}</div>
             {selectedCompetition && selectedCompetition.name ? (
               <div style={{ fontSize: 13, color: "var(--fg-muted)", marginTop: 8 }}>
-                {selectedCompetition.name} · id {resolvedCompetitionId}
+                {selectedCompetition.name}
               </div>
             ) : null}
           </div>
@@ -218,16 +218,11 @@ export function RankingTab() {
             if (c.slug && c.slug !== label) label = label + " (" + c.slug + ")";
             return (
               <option key={String(c.id)} value={String(c.id)}>
-                {label} · id {c.id}
+                {label}
               </option>
             );
           })}
         </select>
-        {selectedCompetition && selectedCompetition.name ? (
-          <span style={{ fontSize: 12, color: "var(--fg-muted)" }}>
-            id {resolvedCompetitionId}
-          </span>
-        ) : null}
       </div>
       {ranked.length >= 1 && (
         <div className="podium">

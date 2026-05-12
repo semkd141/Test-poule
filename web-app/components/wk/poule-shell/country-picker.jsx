@@ -7,7 +7,13 @@ import { useApp } from "../poule-context.jsx";
 export function CountryPicker(props) {
   const { t } = useApp();
   const [q, setQ] = useState("");
-  const filtered = ALL_COUNTRIES.filter(function(c) { return c.toLowerCase().indexOf(q.toLowerCase()) !== -1; });
+  var baseList =
+    props.items && props.items.length
+      ? props.items
+      : ALL_COUNTRIES;
+  const filtered = baseList.filter(function(c) {
+    return c.toLowerCase().indexOf(q.toLowerCase()) !== -1;
+  });
 
   return (
     <div className="modal-backdrop" onClick={props.onClose}>

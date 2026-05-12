@@ -26,11 +26,10 @@ import { FloatingDecor } from "./floating-decor.jsx";
 import { Header } from "./header.jsx";
 import { Tabs } from "./tabs.jsx";
 import { RankingTab } from "./ranking-tab.jsx";
-import { MatchesTab } from "./matches-tab.jsx";
 import { Matches2Tab } from "./matches2-tab.jsx";
 import { ResultsTab } from "./results-tab.jsx";
 import { TeamsTab } from "./teams/teams-tab.jsx";
-import { RegisterTab } from "./register-tab.jsx";
+import { RegisterTab2 } from "./register-tab2.jsx";
 import { EditMyTeamTab } from "./edit-my-team-tab.jsx";
 import { RulesTab } from "./rules-tab.jsx";
 import { AdminTab } from "./admin/admin-tab.jsx";
@@ -70,7 +69,9 @@ export function App() {
     var qp = new URLSearchParams(window.location.search);
     if (qp.has("code")) return "edit";
     var norm = raw === "/edit" || raw === "edit" ? "edit" : raw;
-    var valid = ["ranking","matches","matches2","results","teams","competitions","register","edit","rules","competition","poolPoints","admin"];
+    if (norm === "register2") return "register";
+    if (norm === "matches2") return "matches";
+    var valid = ["ranking","matches","results","teams","competitions","register","edit","rules","competition","poolPoints","admin"];
     if (norm && valid.indexOf(norm) !== -1) return norm;
     return "register";
   }
@@ -349,12 +350,11 @@ export function App() {
       <Tabs active={tab} onChange={setTab} />
       <main className="main">
         {tab === "ranking" && <RankingTab />}
-        {tab === "matches" && <MatchesTab />}
-        {tab === "matches2" && <Matches2Tab />}
+        {tab === "matches" && <Matches2Tab />}
         {tab === "results" && <ResultsTab />}
         {tab === "teams" && <TeamsTab />}
         {tab === "competitions" && <AllCompetitionsTab />}
-        {tab === "register" && <RegisterTab />}
+        {tab === "register" && <RegisterTab2 />}
         {tab === "edit" && <EditMyTeamTab />}
         {tab === "rules" && <RulesTab />}
         {tab === "competition" && <CompetitionTab />}

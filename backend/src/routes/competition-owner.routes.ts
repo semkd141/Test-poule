@@ -1,20 +1,28 @@
 import { Router } from "express";
 import type { Request } from "express";
 import type { Env } from "../config/env.js";
+import type { AppLogger } from "../lib/logger.js";
 import type { SupabaseGateway } from "../services/supabase-gateway.js";
 import { HttpError } from "../shared/http-error.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { canManageCompetition } from "../auth/can-manage-competition.js";
-import { isPlatformOperator } from "../auth/platform-operator.js";
 import { normEmail } from "../participant/participant-access.js";
 import { TransactionalEmailService } from "../services/transactional-email.js";
 import {
   fetchAllFixturesFromApiFootball,
   mapApiResponseToFixtureRows,
 } from "../services/api-football-fixture-mapper.js";
-import { syncFixtureSquadMembers } from "../services/fixture-squad-sync.service.js";
+import {
+  FIXTURE_SQUAD_BATCH_BACKGROUND_MESSAGE,
+  startFixtureSquadBackgroundBatch,
+  syncFixtureSquadMembers,
+} from "../services/fixture-squad-sync.service.js";
 import { z } from "zod";
-import { resolvedLeagueFields, defaultApiFootballSeasonForLeagueType } from "../league-type-resolve.js";
+import {
+  resolvedLeagueFields,
+  defaultApiFootballSeasonForLeagueType,
+  parseApiFootballSeasonYearFromSeasonLabel,
+} from "../league-type-resolve.js";
 
 function ownerSub(req: Request): string {
   const s = req.supabaseUser?.sub;
@@ -115,8 +123,18 @@ function resolveApiFootballLeagueSeason(
     }
   }
 
-  if (metaLeague !== undefined && metaSeason !== undefined) {
-    return { league: metaLeague, season: metaSeason };
+  const labelSeason = parseApiFootballSeasonYearFromSeasonLabel(competitionRow.season_label);
+  const bodySeason =
+    bs !== undefined
+      ? (() => {
+          const n = Number(bs);
+          return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
+        })()
+      : undefined;
+  const resolvedSeason = bodySeason ?? labelSeason ?? metaSeason;
+
+  if (metaLeague !== undefined && resolvedSeason !== undefined) {
+    return { league: metaLeague, season: resolvedSeason };
   }
 
   const compLeague = Number(competitionRow.api_football_league_id);
@@ -124,14 +142,7 @@ function resolveApiFootballLeagueSeason(
     metaLeague ??
     (Number.isFinite(compLeague) && compLeague > 0 ? Math.floor(compLeague) : undefined);
 
-  const season =
-    metaSeason ??
-    (bs !== undefined
-      ? (() => {
-          const n = Number(bs);
-          return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
-        })()
-      : undefined);
+  const season = resolvedSeason;
 
   if (league !== undefined && season !== undefined) {
     return { league, season };
@@ -181,18 +192,13 @@ async function requesterEmail(req: Request, gateway: SupabaseGateway): Promise<s
   return null;
 }
 
-export function createCompetitionOwnerRouter(gateway: SupabaseGateway, env: Env): Router {
+export function createCompetitionOwnerRouter(gateway: SupabaseGateway, env: Env, log: AppLogger): Router {
   const router = Router();
 
   router.get(
     "/",
     asyncHandler(async (req, res) => {
       const sub = ownerSub(req);
-      if (isPlatformOperator(req, env)) {
-        const raw = await gateway.listCompetitions();
-        res.json(Array.isArray(raw) ? raw : []);
-        return;
-      }
       const out = await gateway.listCompetitionsByOwner(sub);
       res.json(Array.isArray(out) ? out : []);
     }),
@@ -205,10 +211,13 @@ export function createCompetitionOwnerRouter(gateway: SupabaseGateway, env: Env)
       const parsed = competitionCreateSchema.safeParse(req.body);
       if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
       const leagueFields = await resolvedLeagueFields(gateway, parsed.data.league_type);
+      const defaultSeason = defaultApiFootballSeasonForLeagueType(leagueFields.league_type);
+      const labelSeason = parseApiFootballSeasonYearFromSeasonLabel(parsed.data.season_label);
+      const chosenSeason = labelSeason ?? defaultSeason;
       const meta = ensureMetadataApiFootballLeagueSeason(
         parsed.data.metadata,
         leagueFields.api_football_league_id,
-        defaultApiFootballSeasonForLeagueType(leagueFields.league_type),
+        chosenSeason,
       );
       const body: Record<string, unknown> = {
         slug: parsed.data.slug.trim().toLowerCase(),
@@ -348,19 +357,70 @@ export function createCompetitionOwnerRouter(gateway: SupabaseGateway, env: Env)
 
       const mapsRaw = await gateway.listFixtureMappings(competitionId);
       const maps = Array.isArray(mapsRaw) ? mapsRaw : [];
-      const allowed = maps.some((m) => {
+      const match = maps.find((m) => {
         if (!m || typeof m !== "object" || Array.isArray(m)) return false;
         return Number((m as Record<string, unknown>).api_fixture_id) === fixtureId;
       });
-      if (!allowed) {
+      if (!match || typeof match !== "object" || Array.isArray(match)) {
         throw new HttpError(
           400,
           "This fixture id is not linked in this pool’s fixture mappings (set the API fixture id on the row first).",
         );
       }
+      const mapRec = match as Record<string, unknown>;
+      const mapLeague = Number(mapRec.api_football_league_id);
+      const mapSeason = Number(mapRec.season);
+      const leagueSeasonFromMapping =
+        Number.isFinite(mapLeague) && mapLeague > 0 && Number.isFinite(mapSeason) && mapSeason > 0
+          ? { api_football_league_id: Math.floor(mapLeague), season: Math.floor(mapSeason) }
+          : undefined;
 
-      const out = await syncFixtureSquadMembers(fixtureId, gateway, env);
+      const out = await syncFixtureSquadMembers(fixtureId, gateway, env, leagueSeasonFromMapping);
       res.json(out);
+    }),
+  );
+
+  /** Queue background squad import for all mapped API fixture ids (3s between API calls; same skip rules as batch internal). */
+  router.post(
+    "/:competitionId/fetch-all-fixture-squads",
+    asyncHandler(async (req, res) => {
+      const cid = String(req.params.competitionId ?? "").trim();
+      if (!cid) throw new HttpError(400, "competition id required");
+      const comp = await gateway.getCompetitionById(cid);
+      if (!comp) throw new HttpError(404, "Competition not found");
+      if (!canManageCompetition(req, env, comp)) throw new HttpError(403, "Forbidden");
+
+      const competitionId = Number(comp.id);
+      if (!Number.isFinite(competitionId)) throw new HttpError(500, "Invalid competition id");
+
+      const scope = gateway.getFixtureMappingScopeForCompetition(comp as Record<string, unknown>);
+      if (!scope) {
+        throw new HttpError(400, "Pool has no API-Football league/season for fixture mappings (import fixtures first).");
+      }
+
+      const mapsRaw = await gateway.listFixtureMappings(competitionId);
+      const maps = Array.isArray(mapsRaw) ? mapsRaw : [];
+      const seen = new Set<number>();
+      const fixtureIds: number[] = [];
+      for (const m of maps) {
+        if (!m || typeof m !== "object" || Array.isArray(m)) continue;
+        const fid = Math.floor(Number((m as Record<string, unknown>).api_fixture_id));
+        if (!Number.isFinite(fid) || fid <= 0 || seen.has(fid)) continue;
+        seen.add(fid);
+        fixtureIds.push(fid);
+      }
+      if (fixtureIds.length === 0) {
+        throw new HttpError(400, "No fixture mappings with a valid API fixture id yet.");
+      }
+      if (!env.API_FOOTBALL_KEY) throw new HttpError(500, "API_FOOTBALL_KEY is not configured");
+
+      startFixtureSquadBackgroundBatch(
+        { fixtureIds, leagueId: scope.leagueId, season: scope.season },
+        gateway,
+        env,
+        log,
+      );
+      res.json({ message: FIXTURE_SQUAD_BATCH_BACKGROUND_MESSAGE, queued: fixtureIds.length });
     }),
   );
 

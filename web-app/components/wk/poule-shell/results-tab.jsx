@@ -189,7 +189,7 @@ export function ResultsTab() {
             if (c.slug && c.slug !== label) label = label + " (" + c.slug + ")";
             return (
               <option key={String(c.id)} value={String(c.id)}>
-                {label} · id {c.id}
+                {label}
               </option>
             );
           })}

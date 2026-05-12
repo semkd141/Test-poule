@@ -25,6 +25,7 @@ export function createParticipantsRouter(
   router.get("/competitions", handlers.listPublicCompetitions);
   router.get("/league-types", handlers.listApiFootballLeagueTypes);
   router.get("/competitions/:competitionId/fixture-mappings", handlers.listPublicFixtureMappings);
+  router.get("/competitions/:competitionId/squad-roster", handlers.listPublicCompetitionSquadRoster);
   router.post("/competitions/:competitionId/fixture-statistics", handlers.postCompetitionFixtureStatistics);
   /** Body: `{ "competition_id": number }` — primary path (pair with tab on `/competitions/:id/join`). */
   router.post("/participants/join", requireJwt, handlers.joinCompetition);
@@ -42,6 +43,7 @@ export function createParticipantsRouter(
   router.get("/participants/my-team-competitions", requireJwt, handlers.listMyTeamCompetitions);
   router.get("/participants/by-email", optionalJwt, handlers.findParticipantByEmail);
   router.get("/players", handlers.listPlayers);
+  router.get("/participants/:id/player-rollups", requireJwt, gate, handlers.listParticipantPlayerRollups);
   router.post("/participants", optionalJwt, handlers.createParticipant);
   router.patch("/participants/:id/players", optionalJwt, gate, handlers.patchParticipantPlayers);
   router.patch("/participants/:id", optionalJwt, gate, handlers.patchParticipant);

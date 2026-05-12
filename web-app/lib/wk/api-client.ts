@@ -49,6 +49,45 @@ export type WkSelectedCompetition = {
   registration_open?: boolean;
 };
 
+/** Response from `GET /api/internal/analytics` (superadmin dashboard). */
+export type AdminAnalyticsSnapshot = {
+  generatedAt: string;
+  counts: {
+    competitions: number;
+    competitionsWithOwner: number;
+    competitionsPlatform: number;
+    teamsRegistered: number;
+    teamsLinkedToAuthUser: number;
+    competitionMembers: number;
+    invitesTotal: number;
+    invitesPending: number;
+    invitesAccepted: number;
+    fixtureMappings: number;
+    matches: number;
+    participantScoreEvents: number;
+    playerPointsRollupRows: number;
+    fixtureSquadMembers: number;
+    fixtureSquadFetched: number;
+    playerStatisticsRows: number;
+    apiFootballLeagueTypes: number;
+  };
+  topPoolsByTeamCount: Array<{
+    competition_id: number;
+    team_count: number;
+    name: string | null;
+    slug: string | null;
+    owner_user_id: string | null;
+  }>;
+  recentTeamRegistrations: Array<{
+    id: number;
+    competition_id: number;
+    email: string | null;
+    teamnaam: string | null;
+    naam: string | null;
+    created_at: string | null;
+  }>;
+};
+
 export function readSelectedCompetition(): WkSelectedCompetition | null {
   if (typeof window === "undefined") return null;
   try {
@@ -489,7 +528,21 @@ export async function listPublicCompetitions(): Promise<PublicCompetition[]> {
   }
 }
 
-/** Competitions you may pick on Register: pools you joined (e.g. invite / public), excluding pools you own (requires Bearer). */
+/** For Edit / My team picker: drop pools `viewerUserId` organizes (`owner_user_id`). */
+export function hideOwnedPoolsForViewer<T extends { owner_user_id?: string | null }>(
+  rows: T[],
+  viewerUserId: string | null | undefined,
+): T[] {
+  const v = viewerUserId != null && typeof viewerUserId === "string" ? viewerUserId.trim() : "";
+  if (!v) return rows;
+  return rows.filter(function (c) {
+    const o = c.owner_user_id;
+    const os = o != null && String(o).trim() ? String(o).trim() : "";
+    return os !== v;
+  });
+}
+
+/** Competitions you may pick on Register: pools you are a member of, excluding pools you organize (requires Bearer). */
 export async function listMyRegisterableCompetitions(): Promise<PublicCompetition[]> {
   const bearer = await participantAuthHeaders();
   if (!bearer.Authorization) return [];
@@ -542,9 +595,67 @@ export async function listPublicFixtureMappings(competitionId: number): Promise<
   return Array.isArray(data) ? (data as FixtureMappingPublic[]) : [];
 }
 
+/** Distinct players from `fixture_squad_members` for the pool's league+season (API-Football ids). */
+export type SquadRosterPlayer = {
+  player_id: number;
+  name: string | null;
+  team: string | null;
+  pos: string | null;
+};
+
+export async function fetchPublicCompetitionSquadRoster(competitionId: number): Promise<SquadRosterPlayer[]> {
+  const r = await fetch(
+    `${apiBase()}/competitions/${encodeURIComponent(String(competitionId))}/squad-roster`,
+    { headers: jsonHeaders, cache: "no-store" },
+  );
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  const data = (await r.json()) as unknown;
+  return Array.isArray(data) ? (data as SquadRosterPlayer[]) : [];
+}
+
+export type PlayerRollupRow = {
+  id?: number;
+  player_id: number;
+  pos: string | null;
+  is_captain: boolean;
+  points: number;
+};
+
+export async function fetchParticipantPlayerRollups(participantId: number | string): Promise<PlayerRollupRow[]> {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(
+    `${apiBase()}/participants/${encodeURIComponent(String(participantId))}/player-rollups`,
+    { headers: { ...jsonHeaders, ...bearer }, cache: "no-store" },
+  );
+  if (r.status === 401) return [];
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  const data = (await r.json()) as unknown;
+  return Array.isArray(data) ? (data as PlayerRollupRow[]) : [];
+}
+
+export async function patchParticipantPlayerRollups(
+  participantId: number | string,
+  players: Array<{ player_id: number; pos?: string | null; is_captain?: boolean; points?: number }>,
+): Promise<void> {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(
+    `${apiBase()}/participants/${encodeURIComponent(String(participantId))}/players`,
+    {
+      method: "PATCH",
+      headers: { ...jsonHeaders, ...bearer, "Content-Type": "application/json" },
+      body: JSON.stringify({ players }),
+    },
+  );
+  if (!r.ok) {
+    const msg = await readErrorBody(r);
+    throw new Error(`(${r.status}) ${msg}`);
+  }
+}
+
 export type FixtureStatisticsPlayer = {
   land: string;
   speler_naam: string;
+  player_id: number | null;
   punten: number;
 };
 
@@ -680,6 +791,8 @@ export async function dbToevoegen(deelnemer: {
   spelers?: unknown[];
   competition_id?: number;
   competition_name?: string;
+  /** When set, server may stamp `competitions.starts_at` (if still unset) to this ISO datetime = registration close. */
+  pool_registration_starts_at?: string;
 }) {
   const bearer = await participantAuthHeaders();
   const body: Record<string, unknown> = {
@@ -694,6 +807,9 @@ export async function dbToevoegen(deelnemer: {
   }
   if (deelnemer.competition_name != null && String(deelnemer.competition_name).trim()) {
     body.competition_name = String(deelnemer.competition_name).trim();
+  }
+  if (deelnemer.pool_registration_starts_at != null && String(deelnemer.pool_registration_starts_at).trim()) {
+    body.pool_registration_starts_at = String(deelnemer.pool_registration_starts_at).trim();
   }
   const r = await fetch(`${apiBase()}/participants`, {
     method: "POST",
@@ -828,6 +944,16 @@ export async function adminUpdateFixtureMapping(
   return await r.json();
 }
 
+/** Superadmin analytics snapshot (counts, top pools, recent team sign-ups). */
+export async function adminFetchAnalytics(): Promise<AdminAnalyticsSnapshot> {
+  const bearer = await participantAuthHeaders();
+  const r = await fetch(`${apiBase()}/internal/analytics`, {
+    headers: { ...jsonHeaders, ...bearer },
+  });
+  if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
+  return (await r.json()) as AdminAnalyticsSnapshot;
+}
+
 /** Competitions you own (requires logged-in session). */
 export async function myListCompetitions() {
   const bearer = await participantAuthHeaders();
@@ -857,7 +983,7 @@ export async function myCreateCompetition(body: {
   return await r.json();
 }
 
-/** Single competition you can manage (owner or platform operator). */
+/** Single competition you created (`owner_user_id` matches the signed-in user). */
 export async function myGetMyCompetition(id: number | string) {
   const bearer = await participantAuthHeaders();
   const r = await fetch(`${apiBase()}/my-competitions/${encodeURIComponent(String(id))}`, {
@@ -990,19 +1116,19 @@ export async function myImportApiFootballFixtures(
   };
 }
 
-/** Import squad (players + coaches) for one API-Football fixture into `fixture_squad_members` (server rules apply). */
-export async function myFetchFixtureSquad(competitionId: number | string, fixtureId: number) {
+/** Queue background squad import for all mapped API fixtures (3s between upstream API calls). */
+export async function myFetchAllFixtureSquads(competitionId: number | string) {
   const bearer = await participantAuthHeaders();
   const r = await fetch(
-    `${apiBase()}/my-competitions/${encodeURIComponent(String(competitionId))}/fetch-fixture-squad`,
+    `${apiBase()}/my-competitions/${encodeURIComponent(String(competitionId))}/fetch-all-fixture-squads`,
     {
       method: "POST",
       headers: { ...jsonHeaders, ...bearer },
-      body: JSON.stringify({ fixtureId }),
+      body: JSON.stringify({}),
     },
   );
   if (!r.ok) throw new Error(`(${r.status}) ${await readErrorBody(r)}`);
-  return (await r.json()) as { message: string };
+  return (await r.json()) as { message: string; queued?: number };
 }
 
 export async function invitePreview(token: string) {

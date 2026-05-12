@@ -15,9 +15,11 @@ import {
 } from "../../../../lib/wk/api-client";
 import { toastError } from "../../../../lib/wk/toast";
 import { AdminRow } from "./admin-row.jsx";
+import { AdminAnalyticsSection } from "./admin-analytics-section.jsx";
 
 export function AdminTab() {
   const { t, participants, config, reloadParticipants, setTab } = useApp();
+  const ta = t.adminAnalytics || {};
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [confirmDeleteCompetition, setConfirmDeleteCompetition] = useState(null);
   const [adminChildTab, setAdminChildTab] = useState("points");
@@ -212,6 +214,12 @@ export function AdminTab() {
         >
           {t.competitionManagement || "Competition management"}
         </button>
+        <button
+          className={"btn " + (adminChildTab === "analytics" ? "" : "btn-outline")}
+          onClick={function(){ setAdminChildTab("analytics"); }}
+        >
+          {ta.title || "Analytics"}
+        </button>
       </div>
 
       {adminChildTab === "points" ? (
@@ -255,6 +263,29 @@ export function AdminTab() {
             })
           )}
         </React.Fragment>
+      ) : adminChildTab === "analytics" ? (
+        <div
+          style={{
+            padding: "14px 16px",
+            background: "var(--bg-3)",
+            borderRadius: 10,
+            marginBottom: 18,
+            borderLeft: "3px solid #6366F1",
+          }}
+        >
+          <div
+            style={{
+              fontFamily: "var(--wk-heading-font)",
+              fontSize: 16,
+              letterSpacing: "0.05em",
+              color: "#6366F1",
+              marginBottom: 14,
+            }}
+          >
+            {ta.title || "Analytics"}
+          </div>
+          <AdminAnalyticsSection ta={ta} />
+        </div>
       ) : (
         <div style={{padding:"14px 16px",background:"var(--bg-3)",borderRadius:10,marginBottom:18,borderLeft:"3px solid #10B981"}}>
           <div style={{fontFamily:"var(--wk-heading-font)",fontSize:16,letterSpacing:"0.05em",color:"#10B981",marginBottom:10}}>

@@ -14,7 +14,7 @@ import {
   mySendCompetitionInvite,
   myListCompetitionInvites,
   myImportApiFootballFixtures,
-  myFetchFixtureSquad,
+  myFetchAllFixtureSquads,
   listLeagueTypes,
 } from "../../../lib/wk/api-client";
 import { toastError, toastSuccess, toastWarning } from "../../../lib/wk/toast";
@@ -65,7 +65,7 @@ export function CompetitionTab() {
   const [importLeague, setImportLeague] = useState("1");
   const [importSeason, setImportSeason] = useState("2022");
   const [importBusy, setImportBusy] = useState(false);
-  const [fetchingSquadFixtureId, setFetchingSquadFixtureId] = useState(null);
+  const [fetchAllSquadsBusy, setFetchAllSquadsBusy] = useState(false);
 
   const refreshSession = useCallback(async function() {
     setLoadingSession(true);
@@ -97,7 +97,15 @@ export function CompetitionTab() {
     if (!session) return;
     try {
       const rows = await myListCompetitions();
-      setCompetitions(Array.isArray(rows) ? rows : []);
+      const list = Array.isArray(rows) ? rows : [];
+      const uid = session.user && session.user.id != null ? String(session.user.id).trim() : "";
+      const onlyMine =
+        uid.length > 0
+          ? list.filter(function(c) {
+              return c && String(c.owner_user_id || "").trim() === uid;
+            })
+          : [];
+      setCompetitions(onlyMine);
     } catch (e) {
       console.error("myListCompetitions", e);
       setCompetitions([]);
@@ -328,24 +336,28 @@ export function CompetitionTab() {
     }
   }
 
-  async function fetchFixtureSquadForRow(apiFixtureId) {
-    if (!selectedId || apiFixtureId == null || apiFixtureId === "") {
-      toastWarning(tc.fetchFixtureSquadNoId || "Set an API fixture id on this row first.");
+  async function fetchAllFixtureSquads() {
+    if (!selectedId) return;
+    var withId = fixtureMappings.filter(function(m) {
+      return (
+        m.api_fixture_id != null &&
+        m.api_fixture_id !== "" &&
+        Number.isFinite(Number(m.api_fixture_id)) &&
+        Number(m.api_fixture_id) > 0
+      );
+    });
+    if (withId.length === 0) {
+      toastWarning(tc.fetchAllFixtureSquadsNoMappings || "No fixtures with a valid API fixture id yet.");
       return;
     }
-    var fid = Number(apiFixtureId);
-    if (!Number.isFinite(fid) || fid <= 0) {
-      toastError(tc.fixtureIdPositive || "Fixture id must be a positive integer.");
-      return;
-    }
-    setFetchingSquadFixtureId(String(fid));
+    setFetchAllSquadsBusy(true);
     try {
-      var out = await myFetchFixtureSquad(selectedId, fid);
-      toastSuccess(out.message || tc.fetchFixtureSquadSuccess || "players with this fixture fetched");
+      var out = await myFetchAllFixtureSquads(selectedId);
+      toastSuccess(out.message || tc.fetchAllFixtureSquadsStarted || "Squad members are being fetched.");
     } catch (e) {
-      toastError((tc.fetchFixtureSquadFailed || "Could not fetch squad") + ": " + (e.message || ""));
+      toastError((tc.fetchAllFixtureSquadsFailed || "Could not start squad fetch") + ": " + (e.message || ""));
     } finally {
-      setFetchingSquadFixtureId(null);
+      setFetchAllSquadsBusy(false);
     }
   }
 
@@ -581,9 +593,6 @@ export function CompetitionTab() {
 
           <div style={{ fontSize: 13, color: "var(--fg-muted)", marginBottom: 12 }}>
             <div>
-              {tc.poolIdLabel || "Pool id"}: <code>{selected.id}</code>
-            </div>
-            <div style={{ marginTop: 4 }}>
               {tc.teamsLabel || "Teams registered"}: {participants.length}
             </div>
           </div>
@@ -690,9 +699,36 @@ export function CompetitionTab() {
 
           {fixtureMappings.length > 0 ? (
             <div style={{ marginTop: 14 }}>
-              <div style={{ fontFamily: "var(--wk-heading-font)", fontSize: 14, marginBottom: 8 }}>
-                {tc.fixturesTitle || "Fixture links (API Football id)"}
+              <div
+                style={{
+                  fontFamily: "var(--wk-heading-font)",
+                  fontSize: 14,
+                  marginBottom: 8,
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
+                }}
+              >
+                <span>{tc.fixturesTitle || "Fixture links (API Football id)"}</span>
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  style={{ padding: "6px 12px", fontSize: 12, whiteSpace: "nowrap" }}
+                  disabled={busy || importBusy || fetchAllSquadsBusy}
+                  title={tc.fetchAllFixtureSquadsHint || ""}
+                  onClick={fetchAllFixtureSquads}
+                >
+                  {fetchAllSquadsBusy
+                    ? tc.fetchAllFixtureSquadsBusy || "…"
+                    : tc.fetchAllFixtureSquadsButton || "Fetch players for all fixtures"}
+                </button>
               </div>
+              <p style={{ fontSize: 11, color: "var(--fg-muted)", marginBottom: 8, lineHeight: 1.45 }}>
+                {tc.fetchAllFixtureSquadsHint ||
+                  "Starts a background job: one API call per fixture, 3s pause between calls; sides already stored for this league, season, and team name are skipped."}
+              </p>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 280, overflow: "auto" }}>
                 {fixtureMappings.map(function(m) {
                   var hasFx =
@@ -700,13 +736,12 @@ export function CompetitionTab() {
                     m.api_fixture_id !== "" &&
                     Number.isFinite(Number(m.api_fixture_id)) &&
                     Number(m.api_fixture_id) > 0;
-                  var busyThis = fetchingSquadFixtureId === String(m.api_fixture_id);
                   return (
                     <div
                       key={m.id}
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "minmax(0, 100px) 64px minmax(0, 1fr) auto",
+                        gridTemplateColumns: "minmax(0, 100px) 64px minmax(0, 1fr)",
                         gap: 8,
                         alignItems: "center",
                         fontSize: 12,
@@ -721,25 +756,6 @@ export function CompetitionTab() {
                       <code style={{ margin: 0, color: "var(--fg)", opacity: hasFx ? 1 : 0.5, minWidth: 0 }}>
                         {hasFx ? String(m.api_fixture_id) : "—"}
                       </code>
-                      <button
-                        type="button"
-                        className="btn btn-outline"
-                        style={{ padding: "4px 8px", fontSize: 11, whiteSpace: "nowrap" }}
-                        disabled={!hasFx || busyThis || Boolean(fetchingSquadFixtureId)}
-                        title={
-                          hasFx
-                            ? tc.fetchFixtureSquadHint ||
-                              "Load players and coaches for this match from API-Football (once per fixture id)."
-                            : tc.fetchFixtureSquadNoId || "Set an API fixture id on this row first."
-                        }
-                        onClick={function() {
-                          fetchFixtureSquadForRow(m.api_fixture_id);
-                        }}
-                      >
-                        {busyThis
-                          ? tc.fetchFixtureSquadBusy || "…"
-                          : tc.fetchFixtureSquadButton || "Fetch players"}
-                      </button>
                     </div>
                   );
                 })}

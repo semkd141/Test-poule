@@ -386,7 +386,7 @@ function CompetitionPicker() {
           if (c.slug && c.slug !== label) label = label + " (" + c.slug + ")";
           return (
             <option key={String(c.id)} value={String(c.id)}>
-              {label} · id {c.id}
+              {label}
             </option>
           );
         })}
@@ -781,8 +781,12 @@ function FixtureStatisticsModal(props) {
                     </thead>
                     <tbody>
                       {players.map(function (p, idx) {
+                        var rowKey =
+                          p.player_id != null && p.player_id > 0
+                            ? String(p.player_id) + "-" + p.land
+                            : idx + "-" + p.land + "-" + p.speler_naam;
                         return (
-                          <tr key={idx + "-" + p.land + "-" + p.speler_naam}>
+                          <tr key={rowKey}>
                             <td>{p.land}</td>
                             <td>{p.speler_naam}</td>
                             <td>{p.punten}</td>
@@ -884,8 +888,7 @@ function ScheduleView2() {
           </div>
         </div>
         <div style={{ fontSize: 12, color: "var(--fg-muted)" }}>
-          {selected && selected.name ? String(selected.name) : ""}{" "}
-          <span style={{ opacity: 0.7 }}>(id {competitionId})</span>
+          {selected && selected.name ? String(selected.name) : ""}
         </div>
         <div style={{ fontSize: 11, color: "var(--fg-muted)", fontStyle: "italic" }}>
           {useCompetitionTz

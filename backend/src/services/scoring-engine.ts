@@ -11,33 +11,20 @@ type MatchRow = {
   round: string | null;
 };
 
-type ParticipantRow = {
+type TeamRow = {
   id: number;
-  spelers: unknown;
+  competition_id: number;
 };
 
-type Pick = {
-  land?: string;
-  punten?: number;
-  aanvoerder?: boolean;
-  positie?: string;
-  goals?: number;
+type RollupRow = {
+  id: number | string;
+  player_id: number;
+  points: unknown;
+  is_captain?: unknown;
+  pos?: unknown;
 };
 
 const BASE_DELTA = 3;
-
-function parsePicks(raw: unknown): Pick[] {
-  if (Array.isArray(raw)) return raw as Pick[];
-  if (typeof raw === "string") {
-    try {
-      const p = JSON.parse(raw) as unknown;
-      return Array.isArray(p) ? (p as Pick[]) : [];
-    } catch {
-      return [];
-    }
-  }
-  return [];
-}
 
 function winnerTeam(m: MatchRow): string | null {
   if (m.home_goals === null || m.away_goals === null) return null;
@@ -45,21 +32,20 @@ function winnerTeam(m: MatchRow): string | null {
   return m.home_goals > m.away_goals ? m.home_team : m.away_team;
 }
 
-function isAttackerPosition(pos: unknown): boolean {
-  const p = String(pos ?? "").toLowerCase();
-  return p === "att" || p === "aanvaller" || p === "forward" || p === "striker";
+function normName(s: unknown): string {
+  return String(s ?? "")
+    .trim()
+    .toLowerCase();
 }
 
-function computeAggregates(picks: Pick[]): { totalPoints: number; attackerGoals: number } {
-  let totalPoints = 0;
-  let attackerGoals = 0;
-  for (const pick of picks) {
-    totalPoints += Number(pick?.punten) || 0;
-    if (isAttackerPosition(pick?.positie)) {
-      attackerGoals += Number(pick?.goals) || 0;
-    }
-  }
-  return { totalPoints, attackerGoals };
+function teamNameMatchesWinner(teamNames: string[], winner: string): boolean {
+  const w = normName(winner);
+  if (!w) return false;
+  return teamNames.some((c) => normName(c) === w);
+}
+
+function isCoachPos(pos: unknown): boolean {
+  return normName(pos) === "coach";
 }
 
 export class ScoringEngine {
@@ -68,67 +54,86 @@ export class ScoringEngine {
   /**
    * Idempotent scoring for matches with status FT/AET/PEN.
    * Uses participant_score_events unique keys to avoid duplicate scoring.
+   * Picks + points live in `player_points_rollup` + `fixture_squad_members` (no `spelers` JSON).
    */
   async scoreCompetition(competitionId: number): Promise<{ matches: number; participantsTouched: number }> {
     const matches = (await this.gateway.listScorableMatches(competitionId)) as MatchRow[];
-    const participants = (await this.gateway.listParticipantsByCompetition(competitionId)) as ParticipantRow[];
+    const teams = (await this.gateway.listParticipantsByCompetition(competitionId)) as TeamRow[];
     let touched = 0;
+
+    const comp = await this.gateway.getCompetitionById(String(competitionId));
+    const scope =
+      comp && typeof comp === "object" && !Array.isArray(comp)
+        ? this.gateway.getFixtureMappingScopeForCompetition(comp as Record<string, unknown>)
+        : null;
+    if (!scope) {
+      return { matches: matches.length, participantsTouched: 0 };
+    }
+    const { leagueId, season } = scope;
 
     for (const m of matches) {
       const winner = winnerTeam(m);
       if (!winner) continue;
 
-      for (const p of participants) {
-        const picks = parsePicks(p.spelers);
-        if (!picks.length) continue;
+      const isFinal = String(m.round ?? "").toLowerCase().includes("final");
+
+      for (const p of teams) {
+        const rollupsRaw = await this.gateway.listPlayerRollupsByTeamLeagueSeason(
+          p.id,
+          leagueId,
+          season,
+        );
+        const rollups = (Array.isArray(rollupsRaw) ? rollupsRaw : []) as RollupRow[];
+        if (rollups.length === 0) continue;
+
         let changed = false;
 
-        for (let i = 0; i < picks.length; i += 1) {
-          const pick = picks[i];
-          if (!pick || !pick.land || pick.land !== winner) continue;
-          const baseKey = `winner:${m.id}:${i}:${winner}`;
-          const canApply = await this.gateway.insertScoreEventIfMissing(p.id, m.id, baseKey, BASE_DELTA);
-          if (canApply) {
-            pick.punten = (Number(pick.punten) || 0) + BASE_DELTA;
+        for (const r of rollups) {
+          const pid = Number(r.player_id);
+          if (!Number.isFinite(pid) || pid <= 0) continue;
+
+          const teamNames = await this.gateway.listFixtureSquadTeamsForPlayer(pid, leagueId, season);
+          if (!teamNameMatchesWinner(teamNames, winner)) continue;
+
+          const curPts = Number(r.points) || 0;
+
+          const winKey = `winner:${m.id}:p${pid}`;
+          const winApply = await this.gateway.insertScoreEventIfMissing(p.id, m.id, winKey, BASE_DELTA);
+          if (winApply) {
+            await this.gateway.patchPlayerRollupById(String(r.id), { points: curPts + BASE_DELTA });
+            r.points = curPts + BASE_DELTA;
             changed = true;
           }
-          if (pick.aanvoerder) {
-            const capKey = `captain:${m.id}:${i}:${winner}`;
+
+          if (r.is_captain === true || r.is_captain === "true") {
+            const capKey = `captain:${m.id}:p${pid}`;
+            const ptsAfter = Number(r.points) || 0;
             const capApply = await this.gateway.insertScoreEventIfMissing(p.id, m.id, capKey, BASE_DELTA);
             if (capApply) {
-              pick.punten = (Number(pick.punten) || 0) + BASE_DELTA;
+              await this.gateway.patchPlayerRollupById(String(r.id), { points: ptsAfter + BASE_DELTA });
+              r.points = ptsAfter + BASE_DELTA;
               changed = true;
             }
           }
-        }
 
-        // Champion bonus: final winner gives +3 to coach pick on same winning country.
-        const isFinal = String(m.round ?? "").toLowerCase().includes("final");
-        if (isFinal) {
-          for (let i = 0; i < picks.length; i += 1) {
-            const pick = picks[i];
-            if (pick?.positie !== "coach" || pick.land !== winner) continue;
-            const champKey = `champion:${m.id}:${i}:${winner}`;
+          if (isFinal && isCoachPos(r.pos)) {
+            const ptsAfter = Number(r.points) || 0;
+            const champKey = `champion:${m.id}:p${pid}`;
             const champApply = await this.gateway.insertScoreEventIfMissing(p.id, m.id, champKey, BASE_DELTA);
             if (champApply) {
-              pick.punten = (Number(pick.punten) || 0) + BASE_DELTA;
+              await this.gateway.patchPlayerRollupById(String(r.id), { points: ptsAfter + BASE_DELTA });
+              r.points = ptsAfter + BASE_DELTA;
               changed = true;
             }
           }
         }
 
-        if (changed) {
-          touched += 1;
-          await this.gateway.patchParticipantPlayers(String(p.id), { spelers: JSON.stringify(picks) });
-        }
+        if (changed) touched += 1;
       }
     }
 
-    // Keep persisted leaderboard metrics in sync, even if no new points were awarded this run.
-    for (const p of participants) {
-      const picks = parsePicks(p.spelers);
-      const agg = computeAggregates(picks);
-      await this.gateway.patchParticipantAggregates(String(p.id), agg.totalPoints, agg.attackerGoals);
+    for (const p of teams) {
+      await this.gateway.recomputeTeamTotalPointsFromRollups(String(p.id));
     }
 
     return { matches: matches.length, participantsTouched: touched };

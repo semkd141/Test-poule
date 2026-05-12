@@ -14,15 +14,273 @@ import {
   persistSupabaseSessionToWkStorage,
   getMyDeelnemer,
   dbBijwerkenVeld,
+  hideOwnedPoolsForViewer,
   listMyTeamCompetitions,
   readSelectedCompetition,
   writeSelectedCompetition,
+  fetchParticipantPlayerRollups,
+  fetchPublicCompetitionSquadRoster,
 } from "../../../lib/wk/api-client";
-import { toastError } from "../../../lib/wk/toast";
+import { toastError, toastWarning } from "../../../lib/wk/toast";
 import { getSupabaseAuthRedirectOrigin } from "@/lib/wk/config";
 import { getSupabaseBrowser } from "../../../lib/wk/supabase-browser";
-import { flag } from "../../../lib/wk/tournament";
+import { flag, FORMATIONS } from "../../../lib/wk/tournament";
 import { CaptainBand } from "./teams/captain-band.jsx";
+
+function isCoachPosRollup(pos) {
+  return String(pos || "")
+    .trim()
+    .toLowerCase() === "coach";
+}
+
+/** Same rules as register-tab2: API-Football lineup `pos` letter vs formation slot. */
+function rosterPosMatchesFormationSlot(rosterPos, formationSlot) {
+  var p = String(rosterPos || "")
+    .trim()
+    .toUpperCase();
+  if (!p) return true;
+  var letter = p.charAt(0);
+  if (formationSlot === "keeper") return letter === "G";
+  if (formationSlot === "def") return letter === "D";
+  if (formationSlot === "mid") return letter === "M";
+  if (formationSlot === "att") return letter === "F" || letter === "A";
+  return false;
+}
+
+function slotHasRealPlayerRollup(slot) {
+  if (!slot) return false;
+  var pid = Math.floor(Number(slot.player_id));
+  return Number.isFinite(pid) && pid > 0;
+}
+
+function emptySlotsForFormation(formation) {
+  return {
+    keeper: Array.from({ length: formation.keeper }, function() {
+      return null;
+    }),
+    def: Array.from({ length: formation.def }, function() {
+      return null;
+    }),
+    mid: Array.from({ length: formation.mid }, function() {
+      return null;
+    }),
+    att: Array.from({ length: formation.att }, function() {
+      return null;
+    }),
+    coach: [null],
+  };
+}
+
+function mergeRosterRowsByPlayerId(roster) {
+  var best = new Map();
+  for (var i = 0; i < roster.length; i++) {
+    var r = roster[i];
+    if (!r || r.player_id == null) continue;
+    var pid = Math.floor(Number(r.player_id));
+    if (!Number.isFinite(pid) || pid <= 0) continue;
+    var name = typeof r.name === "string" && r.name.trim() ? r.name.trim() : null;
+    var team = typeof r.team === "string" && r.team.trim() ? r.team.trim() : null;
+    var pos = typeof r.pos === "string" && r.pos.trim() ? r.pos.trim() : null;
+    var cur = best.get(pid);
+    if (!cur) {
+      best.set(pid, { player_id: pid, name: name, team: team, pos: pos });
+      continue;
+    }
+    function richer(a, b) {
+      var as = a != null && String(a).trim() ? String(a).trim() : "";
+      var bs = b != null && String(b).trim() ? String(b).trim() : "";
+      if (!as) return bs || null;
+      if (!bs) return as;
+      return bs.length > as.length ? bs : as;
+    }
+    best.set(pid, {
+      player_id: pid,
+      name: richer(cur.name, name),
+      team: richer(cur.team, team),
+      pos: richer(cur.pos, pos),
+    });
+  }
+  return best;
+}
+
+function mapRollupPick(rollupRow, rosterById) {
+  if (!rollupRow || rollupRow.player_id == null) return null;
+  var pid = Math.floor(Number(rollupRow.player_id));
+  if (!Number.isFinite(pid) || pid <= 0) return null;
+  var meta = rosterById.get(pid);
+  var pos = rollupRow.pos != null && String(rollupRow.pos).trim() ? String(rollupRow.pos).trim() : meta && meta.pos;
+  return {
+    player_id: pid,
+    name: meta && meta.name != null ? meta.name : null,
+    team: meta && meta.team != null ? meta.team : null,
+    pos: pos || null,
+  };
+}
+
+function rollupsIntoSlotsForEdit(rollups, rosterById, formation) {
+  var sp = emptySlotsForFormation(formation);
+  var coachRows = rollups.filter(function(r) {
+    return isCoachPosRollup(r.pos);
+  });
+  var field = rollups.filter(function(r) {
+    return !isCoachPosRollup(r.pos);
+  });
+  var i = 0;
+  if (sp.keeper.length) sp.keeper[0] = mapRollupPick(field[i++], rosterById);
+  for (var d = 0; d < sp.def.length; d++) {
+    sp.def[d] = mapRollupPick(field[i++], rosterById);
+  }
+  for (var m = 0; m < sp.mid.length; m++) {
+    sp.mid[m] = mapRollupPick(field[i++], rosterById);
+  }
+  for (var a = 0; a < sp.att.length; a++) {
+    sp.att[a] = mapRollupPick(field[i++], rosterById);
+  }
+  if (coachRows.length && sp.coach.length) {
+    sp.coach[0] = mapRollupPick(coachRows[0], rosterById);
+  }
+  var cap = null;
+  var capRow = rollups.find(function(r) {
+    return r.is_captain === true && !isCoachPosRollup(r.pos);
+  });
+  if (capRow && capRow.player_id != null) {
+    var cpid = Math.floor(Number(capRow.player_id));
+    if (Number.isFinite(cpid) && cpid > 0) {
+      var order = ["keeper", "def", "mid", "att"];
+      outer: for (var oi = 0; oi < order.length; oi++) {
+        var p = order[oi];
+        var arr = sp[p] || [];
+        for (var ii = 0; ii < arr.length; ii++) {
+          var slot = arr[ii];
+          if (slot && slot.player_id === cpid) {
+            cap = { pos: p, index: ii };
+            break outer;
+          }
+        }
+      }
+    }
+  }
+  return { slots: sp, captain: cap };
+}
+
+function slotsToLegacyEditRows(slots, captain) {
+  var out = [];
+  var positions = ["keeper", "def", "mid", "att"];
+  positions.forEach(function(posKey) {
+    var arr = slots[posKey] || [];
+    arr.forEach(function(slot, idx) {
+      if (!slotHasRealPlayerRollup(slot)) return;
+      var teamLabel = slot.team != null && String(slot.team).trim() ? String(slot.team).trim() : "";
+      if (!teamLabel) return;
+      var isCap = captain && captain.pos === posKey && captain.index === idx;
+      var nm = slot.name && String(slot.name).trim() ? String(slot.name).trim() : "";
+      var pid = Math.floor(Number(slot.player_id));
+      out.push({
+        land: teamLabel,
+        positie: posKey,
+        spelerNaam: nm,
+        player_id: Number.isFinite(pid) && pid > 0 ? pid : undefined,
+        punten: 0,
+        aanvoerder: Boolean(isCap),
+      });
+    });
+  });
+  var ch = slots.coach && slots.coach[0];
+  if (ch && slotHasRealPlayerRollup(ch)) {
+    var coachTeam = ch.team != null && String(ch.team).trim() ? String(ch.team).trim() : "";
+    if (coachTeam) {
+      var cnm = ch.name && String(ch.name).trim() ? String(ch.name).trim() : "";
+      var cpid = Math.floor(Number(ch.player_id));
+      out.push({
+        land: coachTeam,
+        positie: "coach",
+        spelerNaam: cnm,
+        player_id: Number.isFinite(cpid) && cpid > 0 ? cpid : undefined,
+        punten: 0,
+      });
+    }
+  }
+  return out;
+}
+
+function legacySpelersHasLand(spelers) {
+  if (!Array.isArray(spelers)) return false;
+  return spelers.some(function(sp) {
+    return sp && sp.land && String(sp.land).trim();
+  });
+}
+
+/**
+ * @param rosterRows `fixture_squad_members` for the pool's league+season (via public squad-roster API). Caller fetches once.
+ */
+async function hydrateEditSpelersFromRollups(team, rosterRows) {
+  var raw = Array.isArray(team.spelers) ? team.spelers.slice() : [];
+  if (legacySpelersHasLand(raw)) return raw;
+  var tid = team && team.id != null ? Math.floor(Number(team.id)) : NaN;
+  var cid = team && team.competition_id != null ? Math.floor(Number(team.competition_id)) : NaN;
+  if (!Number.isFinite(tid) || tid <= 0 || !Number.isFinite(cid) || cid <= 0) return raw;
+  var roll = await fetchParticipantPlayerRollups(tid);
+  var roster = Array.isArray(rosterRows) ? rosterRows : [];
+  var rosterById = mergeRosterRowsByPlayerId(roster);
+  var sys = team.systeem && FORMATIONS[team.systeem] ? team.systeem : "4-3-3";
+  var formation = FORMATIONS[sys];
+  var mapped = rollupsIntoSlotsForEdit(Array.isArray(roll) ? roll : [], rosterById, formation);
+  var leg = slotsToLegacyEditRows(mapped.slots, mapped.captain);
+  return leg.length ? leg : raw;
+}
+
+function rosterFieldOptionsForSlot(roster, sp) {
+  var pos = sp.positie;
+  var side = sp.land != null ? String(sp.land).trim() : "";
+  var rows = Array.isArray(roster) ? roster : [];
+  var field = rows.filter(function(r) {
+    return r && !isCoachPosRollup(r.pos) && rosterPosMatchesFormationSlot(r.pos, pos);
+  });
+  if (!side) return field;
+  var sameSide = field.filter(function(r) {
+    return (r.team != null ? String(r.team).trim() : "") === side;
+  });
+  return sameSide.length > 0 ? sameSide : field;
+}
+
+function rosterCoachesFromDb(roster) {
+  var m = mergeRosterRowsByPlayerId(Array.isArray(roster) ? roster : []);
+  var out = [];
+  m.forEach(function(row) {
+    if (row && isCoachPosRollup(row.pos)) out.push(row);
+  });
+  out.sort(function(a, b) {
+    var ta = String(a.team || "").localeCompare(String(b.team || ""));
+    if (ta !== 0) return ta;
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+  return out;
+}
+
+/** Match legacy row to roster `player_id` when `player_id` was not stored on the team row. */
+function resolvePlayerIdFromLegacyRow(sp, roster) {
+  if (sp && sp.player_id != null) {
+    var x = Math.floor(Number(sp.player_id));
+    if (Number.isFinite(x) && x > 0) return x;
+  }
+  var name = sp && (sp.spelerNaam || "").trim();
+  var side = sp && (sp.land || "").trim();
+  if (!name && !side) return null;
+  var m = mergeRosterRowsByPlayerId(Array.isArray(roster) ? roster : []);
+  var hit = null;
+  m.forEach(function(r) {
+    if (hit) return;
+    if (sp.positie === "coach") {
+      if (!isCoachPosRollup(r.pos)) return;
+    } else if (isCoachPosRollup(r.pos)) {
+      return;
+    }
+    var nm = (r.name || "").trim();
+    var tm = (r.team || "").trim();
+    if (name && side && nm === name && tm === side) hit = Math.floor(Number(r.player_id));
+  });
+  return hit != null && Number.isFinite(hit) && hit > 0 ? hit : null;
+}
 
 function formatSupabaseAuthError(err) {
   if (err == null) return "Unknown error";
@@ -38,8 +296,19 @@ function formatSupabaseAuthError(err) {
   return parts.length ? parts.join(" · ") : "Sign-in failed";
 }
 
+const editMyTeamTabFallback = {
+  pickCompetitionTitle: "Choose a competition",
+  pickCompetitionIntro:
+    "Only pools you belong to as a member, or where you already have a team, are listed—not every public competition. Pools you only organize (without a team in that pool) are not shown here.",
+  pickCompetitionRemember: "This choice is remembered for this browser session.",
+  noTeamInPoolTitle: "No team registered for this pool",
+  noTeamInPoolDescription:
+    "Register on the Register tab with this email first, or choose another competition where you already have a team.",
+};
+
 export function EditMyTeamTab() {
-  const { t, participants, config, reloadParticipants, wkSpelers } = useApp();
+  const { t, participants, config, reloadParticipants } = useApp();
+  const etm = t.editMyTeamTab || editMyTeamTabFallback;
 
   // Auth state
   const [authState, setAuthState] = useState("loading"); // loading | unauthenticated | sending | sent | signup_check_email | pick_competition | authenticated | no_team
@@ -59,6 +328,8 @@ export function EditMyTeamTab() {
   const [editNaam, setEditNaam] = useState("");
   const [editTeamnaam, setEditTeamnaam] = useState("");
   const [editSpelers, setEditSpelers] = useState([]);
+  /** `fixture_squad_members` for this pool's API-Football league+season (public squad-roster). */
+  const [squadRoster, setSquadRoster] = useState([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -68,7 +339,31 @@ export function EditMyTeamTab() {
   /** Invalidate pool list when a different account signs in (avoids stale dropdown + wrong lookups). */
   const lastSessionUserKeyRef = useRef("");
 
-  const deadlinePassed = Date.now() > config.deadline.getTime();
+  const globalDeadlinePassed = Date.now() > config.deadline.getTime();
+
+  /** When the pool marks registration closed, or `starts_at` / deadline has passed (matches server rules). */
+  var teamEditLocked = globalDeadlinePassed;
+  if (myTeam && myTeam.competition_id != null) {
+    var editCid = Number(myTeam.competition_id);
+    var editCrow =
+      Number.isFinite(editCid) && editCid > 0
+        ? publicComps.find(function(c) {
+            return Number(c.id) === editCid;
+          })
+        : null;
+    if (editCrow) {
+      teamEditLocked = false;
+      if (editCrow.registration_open === false) teamEditLocked = true;
+      if (editCrow.starts_at != null && String(editCrow.starts_at).trim()) {
+        var editTs = new Date(String(editCrow.starts_at)).getTime();
+        if (!Number.isNaN(editTs) && Date.now() >= editTs) teamEditLocked = true;
+      }
+      if (editCrow.registration_deadline != null && String(editCrow.registration_deadline).trim()) {
+        var editTd = new Date(String(editCrow.registration_deadline)).getTime();
+        if (!Number.isNaN(editTd) && Date.now() > editTd) teamEditLocked = true;
+      }
+    }
+  }
 
   function sessionUserKey(sess) {
     if (!sess || !sess.user) return "";
@@ -78,20 +373,57 @@ export function EditMyTeamTab() {
     return "";
   }
 
-  const spelersByLandPos = useMemo(function() {
-    const m = {};
-    (wkSpelers || []).forEach(function(s) {
-      const k = s.land + "|" + s.positie;
-      if (!m[k]) m[k] = [];
-      m[k].push(s);
-    });
-    return m;
-  }, [wkSpelers]);
+  const squadCoachOptions = useMemo(function() {
+    return rosterCoachesFromDb(squadRoster);
+  }, [squadRoster]);
 
-  const alleCoaches = useMemo(function() {
-    return (wkSpelers || []).filter(function(s){ return s.positie === "coach"; })
-      .sort(function(a,b){ return a.land.localeCompare(b.land); });
-  }, [wkSpelers]);
+  async function applyTeamRosterAndHydrate(team) {
+    var roster = [];
+    var cid = team && team.competition_id != null ? Math.floor(Number(team.competition_id)) : NaN;
+    if (Number.isFinite(cid) && cid > 0) {
+      try {
+        roster = await fetchPublicCompetitionSquadRoster(cid);
+      } catch (e) {
+        console.warn("fetchPublicCompetitionSquadRoster", e);
+      }
+    }
+    if (!Array.isArray(roster)) roster = [];
+    setSquadRoster(roster);
+    try {
+      setEditSpelers(await hydrateEditSpelersFromRollups(team, roster));
+    } catch (_h) {
+      setEditSpelers(Array.isArray(team.spelers) ? team.spelers.slice() : []);
+    }
+  }
+
+  function applyRosterPickToRow(rowIndex, playerIdStr, rosterSnapshot) {
+    var roster = Array.isArray(rosterSnapshot) ? rosterSnapshot : [];
+    if (!playerIdStr || !String(playerIdStr).trim()) {
+      setEditSpelers(function(prev) {
+        var next = prev.slice();
+        if (!next[rowIndex]) return prev;
+        next[rowIndex] = Object.assign({}, next[rowIndex], { spelerNaam: "", player_id: undefined });
+        return next;
+      });
+      return;
+    }
+    var pid = Math.floor(Number(playerIdStr));
+    if (!Number.isFinite(pid) || pid <= 0) return;
+    var picked = mergeRosterRowsByPlayerId(roster).get(pid);
+    if (!picked) return;
+    var teamLabel = picked.team != null && String(picked.team).trim() ? String(picked.team).trim() : "";
+    var nm = picked.name != null && String(picked.name).trim() ? String(picked.name).trim() : "";
+    setEditSpelers(function(prev) {
+      var next = prev.slice();
+      if (!next[rowIndex]) return prev;
+      next[rowIndex] = Object.assign({}, next[rowIndex], {
+        land: teamLabel || next[rowIndex].land,
+        spelerNaam: nm,
+        player_id: pid,
+      });
+      return next;
+    });
+  }
 
   useEffect(function() {
     var sb = getSupabaseBrowser();
@@ -185,18 +517,20 @@ export function EditMyTeamTab() {
     const stored = typeof window !== "undefined" ? readSelectedCompetition() : null;
     if (!stored || !stored.id) {
       setMyTeam(null);
+      setSquadRoster([]);
       setAuthState("pick_competition");
       return;
     }
     const team = await getMyDeelnemer(email, stored.id);
     if (!team) {
       setMyTeam(null);
+      setSquadRoster([]);
       setAuthState("no_team");
     } else {
       setMyTeam(team);
       setEditNaam(team.naam || "");
       setEditTeamnaam(team.teamnaam || "");
-      setEditSpelers(Array.isArray(team.spelers) ? team.spelers.slice() : []);
+      await applyTeamRosterAndHydrate(team);
       setAuthState("authenticated");
     }
   }
@@ -211,6 +545,13 @@ export function EditMyTeamTab() {
     try {
       var rows = await listMyTeamCompetitions();
       var list = Array.isArray(rows) ? rows : [];
+      var uid = "";
+      if (opts && opts.viewerUserId != null && String(opts.viewerUserId).trim()) {
+        uid = String(opts.viewerUserId).trim();
+      } else if (session && session.user && session.user.id) {
+        uid = String(session.user.id).trim();
+      }
+      list = hideOwnedPoolsForViewer(list, uid || null);
       setPublicComps(list);
       return list;
     } catch (e) {
@@ -225,11 +566,22 @@ export function EditMyTeamTab() {
   useEffect(function() {
     if (authState !== "pick_competition" && authState !== "authenticated") return undefined;
     var cancelled = false;
-    fetchMyTeamCompetitionsList({ background: false }).then(function() {
+    fetchMyTeamCompetitionsList({ background: false }).then(function(list) {
       if (cancelled) return;
       if (authState === "pick_competition") {
         var s = readSelectedCompetition();
-        if (s && s.id) setCompetitionSelectId(String(s.id));
+        if (
+          s &&
+          s.id &&
+          Array.isArray(list) &&
+          list.some(function(c) {
+            return Number(c.id) === Number(s.id);
+          })
+        ) {
+          setCompetitionSelectId(String(s.id));
+        } else {
+          setCompetitionSelectId("");
+        }
       }
     });
     return function() { cancelled = true; };
@@ -246,12 +598,16 @@ export function EditMyTeamTab() {
     var team = await getMyDeelnemer(session.user.email, id);
     if (!team) {
       setMyTeam(null);
+      setSquadRoster([]);
       setAuthState("no_team");
+      toastWarning(etm.noTeamInPoolTitle || editMyTeamTabFallback.noTeamInPoolTitle, {
+        description: etm.noTeamInPoolDescription || editMyTeamTabFallback.noTeamInPoolDescription,
+      });
     } else {
       setMyTeam(team);
       setEditNaam(team.naam || "");
       setEditTeamnaam(team.teamnaam || "");
-      setEditSpelers(Array.isArray(team.spelers) ? team.spelers.slice() : []);
+      await applyTeamRosterAndHydrate(team);
       setAuthState("authenticated");
     }
   }
@@ -267,12 +623,16 @@ export function EditMyTeamTab() {
     var team = await getMyDeelnemer(session.user.email, id);
     if (!team) {
       setMyTeam(null);
+      setSquadRoster([]);
       setAuthState("no_team");
+      toastWarning(etm.noTeamInPoolTitle || editMyTeamTabFallback.noTeamInPoolTitle, {
+        description: etm.noTeamInPoolDescription || editMyTeamTabFallback.noTeamInPoolDescription,
+      });
     } else {
       setMyTeam(team);
       setEditNaam(team.naam || "");
       setEditTeamnaam(team.teamnaam || "");
-      setEditSpelers(Array.isArray(team.spelers) ? team.spelers.slice() : []);
+      await applyTeamRosterAndHydrate(team);
       setAuthState("authenticated");
     }
   }
@@ -387,25 +747,26 @@ export function EditMyTeamTab() {
     setMyTeam(null);
     setPublicComps([]);
     setCompetitionSelectId("");
+    setSquadRoster([]);
     setAuthState("unauthenticated");
     setEmailInput("");
   }
 
-  function updateSpelerNaam(index, naam) {
-    setEditSpelers(function(prev) {
-      const next = prev.slice();
-      next[index] = Object.assign({}, next[index], { spelerNaam: naam });
-      return next;
-    });
-  }
-
   async function saveChanges() {
+    if (teamEditLocked) return;
     setSaving(true);
     try {
       await dbBijwerkenVeld(myTeam.id, {
         naam: editNaam.trim(),
         teamnaam: editTeamnaam.trim(),
-        spelers: JSON.stringify(editSpelers)
+        spelers: JSON.stringify(
+          editSpelers.map(function(row) {
+            if (!row || typeof row !== "object") return row;
+            var o = Object.assign({}, row);
+            delete o.player_id;
+            return o;
+          }),
+        ),
       });
       await reloadParticipants();
       setSaved(true);
@@ -423,7 +784,7 @@ export function EditMyTeamTab() {
     return <div className="card" style={{textAlign:"center",padding:40,color:"var(--fg-muted)"}}>Loading…</div>;
   }
 
-  if (deadlinePassed && authState !== "authenticated") {
+  if (globalDeadlinePassed && authState !== "authenticated") {
     return (
       <div className="card" style={{textAlign:"center",padding:"40px 20px"}}>
         <div style={{fontSize:48,marginBottom:16}}>🔒</div>
@@ -606,12 +967,10 @@ export function EditMyTeamTab() {
         <div className="card-title">My Team</div>
         <div className="card" style={{maxWidth:480}}>
           <div style={{fontFamily:"var(--wk-heading-font)",fontSize:16,letterSpacing:"0.05em",color:"var(--orange)",marginBottom:10}}>
-            Choose a competition
+            {etm.pickCompetitionTitle}
           </div>
-          <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:14,lineHeight:1.6}}>
-            Only pools you belong to (member), own, or already have a team in are listed—not every public competition.
-            This choice is remembered for this browser session.
-          </p>
+          <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:10,lineHeight:1.6}}>{etm.pickCompetitionIntro}</p>
+          <p style={{fontSize:13,color:"var(--fg-muted)",marginBottom:14,lineHeight:1.6}}>{etm.pickCompetitionRemember}</p>
           {competitionsLoading ? (
             <div style={{fontSize:13,color:"var(--fg-muted)"}}>Loading your pools…</div>
           ) : publicComps.length === 0 ? (
@@ -739,6 +1098,7 @@ export function EditMyTeamTab() {
                 value={String((myTeam && myTeam.competition_id) || (readSelectedCompetition() && readSelectedCompetition().id) || "")}
                 onChange={function(e){ switchCompetition(e.target.value); }}
                 style={{fontSize:12,maxWidth:220}}
+                disabled={teamEditLocked}
               >
                 {publicComps.map(function(c) {
                   var label = (c.name || c.slug || "Pool") + (c.season_label ? " · " + c.season_label : "");
@@ -754,7 +1114,7 @@ export function EditMyTeamTab() {
         </div>
       </div>
 
-      {deadlinePassed && (
+      {teamEditLocked && (
         <div style={{background:"rgba(239,68,68,0.08)",border:"1px solid #EF4444",borderRadius:10,padding:"10px 16px",marginBottom:16,fontSize:13,color:"#DC2626"}}>
           🔒 The registration deadline has passed. Your team is now locked and cannot be changed.
         </div>
@@ -766,11 +1126,11 @@ export function EditMyTeamTab() {
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
           <div>
             <label style={{fontSize:11}}>Your name</label>
-            <input type="text" value={editNaam} onChange={function(e){ setEditNaam(e.target.value); }} style={{margin:0}} disabled={deadlinePassed}/>
+            <input type="text" value={editNaam} onChange={function(e){ setEditNaam(e.target.value); }} style={{margin:0}} disabled={teamEditLocked}/>
           </div>
           <div>
             <label style={{fontSize:11}}>Team name</label>
-            <input type="text" value={editTeamnaam} onChange={function(e){ setEditTeamnaam(e.target.value); }} style={{margin:0}} disabled={deadlinePassed}/>
+            <input type="text" value={editTeamnaam} onChange={function(e){ setEditTeamnaam(e.target.value); }} style={{margin:0}} disabled={teamEditLocked}/>
           </div>
         </div>
       </div>
@@ -781,48 +1141,73 @@ export function EditMyTeamTab() {
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
           {editSpelers.map(function(sp, i) {
             if (!sp || !sp.land) return null;
-            const key = sp.land + "|" + sp.positie;
-            const options = spelersByLandPos[key] || [];
             const isCoach = sp.positie === "coach";
+            const curPid = resolvePlayerIdFromLegacyRow(sp, squadRoster);
+            const selVal = curPid != null ? String(curPid) : "";
+            const fieldOpts = isCoach ? [] : rosterFieldOptionsForSlot(squadRoster, sp);
+            const idInFieldOpts = !isCoach && fieldOpts.some(function(o) {
+              return o && Math.floor(Number(o.player_id)) === curPid;
+            });
+            const idInCoachOpts =
+              isCoach &&
+              squadCoachOptions.some(function(o) {
+                return o && Math.floor(Number(o.player_id)) === curPid;
+              });
             return (
               <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:"var(--bg-3)",borderRadius:8,flexWrap:"wrap"}}>
                 <div style={{width:80,flexShrink:0}}>
                   <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",color:"var(--orange)",letterSpacing:"0.05em"}}>{t.pos[sp.positie] || sp.positie}</div>
                   <div style={{fontSize:12,color:"var(--fg-muted)"}}>{flag(sp.land)} {sp.land}</div>
                 </div>
-                {!deadlinePassed ? (
+                {!teamEditLocked ? (
                   isCoach ? (
                     <select
-                      value={sp.land || ""}
-                      onChange={function(e){
-                        const coachInfo = alleCoaches.find(function(c){ return c.land === e.target.value; });
-                        setEditSpelers(function(prev){
-                          const next = prev.slice();
-                          next[i] = Object.assign({}, next[i], { land: e.target.value, spelerNaam: coachInfo ? coachInfo.naam : "" });
-                          return next;
-                        });
+                      value={selVal}
+                      onChange={function(e) {
+                        applyRosterPickToRow(i, e.target.value, squadRoster);
                       }}
                       style={{flex:1,margin:0,fontSize:13}}
                     >
-                      {alleCoaches.map(function(c){ return <option key={c.id} value={c.land}>{c.naam} — {c.land}</option>; })}
+                      <option value="">— Choose coach —</option>
+                      {!idInCoachOpts && curPid != null ? (
+                        <option value={String(curPid)}>
+                          {(sp.spelerNaam && String(sp.spelerNaam).trim()) || "—"} — {sp.land}
+                        </option>
+                      ) : null}
+                      {squadCoachOptions.map(function(c) {
+                        var pid = Math.floor(Number(c.player_id));
+                        var lab = (c.name || "—") + " — " + (c.team || "");
+                        return (
+                          <option key={"c" + String(pid)} value={String(pid)}>
+                            {lab}
+                          </option>
+                        );
+                      })}
                     </select>
-                  ) : options.length > 0 ? (
+                  ) : (
                     <select
-                      value={sp.spelerNaam || ""}
-                      onChange={function(e){ updateSpelerNaam(i, e.target.value); }}
+                      value={selVal}
+                      onChange={function(e) {
+                        applyRosterPickToRow(i, e.target.value, squadRoster);
+                      }}
                       style={{flex:1,margin:0,fontSize:13}}
                     >
                       <option value="">— Choose player —</option>
-                      {options.map(function(o){ return <option key={o.id} value={o.naam}>{o.naam}</option>; })}
+                      {!idInFieldOpts && curPid != null ? (
+                        <option value={String(curPid)}>
+                          {(sp.spelerNaam && String(sp.spelerNaam).trim()) || "—"} · {sp.land}
+                        </option>
+                      ) : null}
+                      {fieldOpts.map(function(o) {
+                        var pid = Math.floor(Number(o.player_id));
+                        var lab = (o.name || "—") + " — " + (o.team || "");
+                        return (
+                          <option key={"p" + String(pid)} value={String(pid)}>
+                            {lab}
+                          </option>
+                        );
+                      })}
                     </select>
-                  ) : (
-                    <input
-                      type="text"
-                      value={sp.spelerNaam || ""}
-                      onChange={function(e){ updateSpelerNaam(i, e.target.value); }}
-                      placeholder="Player name"
-                      style={{flex:1,margin:0,fontSize:13}}
-                    />
                   )
                 ) : (
                   <span style={{flex:1,fontSize:13,color:"var(--fg)"}}>{sp.spelerNaam || "—"}</span>
@@ -834,7 +1219,7 @@ export function EditMyTeamTab() {
         </div>
       </div>
 
-      {!deadlinePassed && (
+      {!teamEditLocked && (
         <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
           <button className="btn" onClick={saveChanges} disabled={saving} style={{minWidth:140}}>
             {saving ? "Saving…" : saved ? "✓ Saved!" : "Save changes"}
