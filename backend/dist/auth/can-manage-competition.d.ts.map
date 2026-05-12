@@ -1,1 +1,0 @@
-{"version":3,"file":"can-manage-competition.d.ts","sourceRoot":"","sources":["../../src/auth/can-manage-competition.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,OAAO,EAAE,MAAM,SAAS,CAAC;AACvC,OAAO,KAAK,EAAE,GAAG,EAAE,MAAM,kBAAkB,CAAC;AAE5C,yGAAyG;AACzG,wBAAgB,oBAAoB,CAAC,GAAG,EAAE,OAAO,EAAE,IAAI,EAAE,GAAG,EAAE,cAAc,EAAE,MAAM,CAAC,MAAM,EAAE,OAAO,CAAC,GAAG,OAAO,CAI9G"}

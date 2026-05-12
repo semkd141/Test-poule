@@ -1,1 +1,0 @@
-{"version":3,"file":"upstream-error.d.ts","sourceRoot":"","sources":["../../src/shared/upstream-error.ts"],"names":[],"mappings":"AAAA;;;GAGG;AACH,qBAAa,iBAAkB,SAAQ,KAAK;IAC1C,QAAQ,CAAC,MAAM,EAAE,MAAM,CAAC;IACxB,QAAQ,CAAC,OAAO,EAAE,OAAO,CAAC;gBAEd,MAAM,EAAE,MAAM,EAAE,OAAO,EAAE,OAAO;CAM7C"}
