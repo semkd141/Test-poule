@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "http";
 import cors from "cors";
 import express from "express";
+import type { NextFunction, Request, Response } from "express";
 import { pinoHttp } from "pino-http";
 import type { Env } from "./config/env.js";
 import type { AppLogger } from "./lib/logger.js";
@@ -22,6 +23,8 @@ export interface CreateAppDeps {
 
 const corsAllowedOrigins = new Set([
   "https://testpoule.vercel.app",
+  "localhost:3000",
+  "http://localhost:3000",
   "https://test-poule.vercel.app",
 ]);
 
@@ -70,7 +73,7 @@ export function createApp(deps: CreateAppDeps): express.Express {
     res.json({ message: "API is running with TypeScript", env: env.NODE_ENV });
   });
 
-  app.use((req, _res, next) => {
+  app.use((req: Request, _res: Response, next: NextFunction) => {
     if ((req.originalUrl ?? "").includes("my-competitions")) {
       // eslint-disable-next-line no-console
       console.error("[mc-debug]", req.method, req.originalUrl, "path=", req.path, "url=", req.url);
