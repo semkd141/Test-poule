@@ -24,6 +24,7 @@ export interface CreateAppDeps {
 const corsAllowedOrigins = new Set([
   "https://testpoule.vercel.app",
   "localhost:3000",
+  "https://test-poule-azso.vercel.app",
   "http://localhost:3000",
   "https://test-poule.vercel.app",
 ]);
