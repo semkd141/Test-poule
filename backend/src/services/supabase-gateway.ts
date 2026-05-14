@@ -460,6 +460,26 @@ export class SupabaseGateway {
     return this.parseSuccessBody(r);
   }
 
+  /** All rollup rows for this API-Football league + season + player (any competition / team). */
+  async listPlayerRollupsByLeagueSeasonPlayer(
+    leagueId: number,
+    season: number,
+    playerId: number,
+  ): Promise<unknown> {
+    const lid = encodeURIComponent(String(Math.floor(leagueId)));
+    const sid = encodeURIComponent(String(Math.floor(season)));
+    const pid = encodeURIComponent(String(Math.floor(playerId)));
+    const sel = encodeURIComponent(
+      "id,competition_id,team_id,api_football_league_id,season,player_id,points,pos,is_captain",
+    );
+    const r = await this.request(
+      "db.player_points_rollup.byLeagueSeasonPlayer",
+      `${this.dbBase}/player_points_rollup?api_football_league_id=eq.${lid}&season=eq.${sid}&player_id=eq.${pid}&select=${sel}`,
+      { headers: this.serviceHeaders() },
+    );
+    return this.parseSuccessBody(r);
+  }
+
   async listPlayerRollupsByTeamLeagueSeason(
     teamId: number,
     leagueId: number,
@@ -774,6 +794,36 @@ export class SupabaseGateway {
     const data = await this.parseSuccessBody(r);
     if (!Array.isArray(data) || data.length === 0) return null;
     return data[0] as Record<string, unknown>;
+  }
+
+  /** `matches.external_fixture_id` is globally unique (API-Football fixture id). */
+  async getMatchByExternalFixtureId(externalFixtureId: number): Promise<Record<string, unknown> | null> {
+    const fid = encodeURIComponent(String(Math.floor(externalFixtureId)));
+    const r = await this.request(
+      "db.matches.byExternalFixture",
+      `${this.dbBase}/matches?external_fixture_id=eq.${fid}&select=*&limit=1`,
+      { headers: this.serviceHeaders() },
+    );
+    const data = await this.parseSuccessBody(r);
+    if (!Array.isArray(data) || data.length === 0) return null;
+    return data[0] as Record<string, unknown>;
+  }
+
+  async patchMatchByExternalFixtureId(
+    externalFixtureId: number,
+    body: { applied?: boolean },
+  ): Promise<void> {
+    const fid = encodeURIComponent(String(Math.floor(externalFixtureId)));
+    const r = await this.request(
+      "db.matches.patchByExternalFixture",
+      `${this.dbBase}/matches?external_fixture_id=eq.${fid}`,
+      {
+        method: "PATCH",
+        headers: { ...this.serviceHeaders(), Prefer: "return=minimal" },
+        body: JSON.stringify(body),
+      },
+    );
+    await this.parseSuccessBody(r);
   }
 
   async listPlayerStatisticsByFixture(fixtureId: number): Promise<unknown> {

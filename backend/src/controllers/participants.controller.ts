@@ -560,25 +560,23 @@ export function createParticipantsHandlers(
         parsed.data.competitionId,
         body.data.fixtureId,
       );
-      if (out.source === "api_football") {
-        const m = out.match as Record<string, unknown> | undefined;
-        const mid = m?.id != null ? Number(m.id) : NaN;
-        if (Number.isFinite(mid) && mid > 0) {
-          startFixtureGoalRollupBackground(
-            {
-              competitionId: parsed.data.competitionId,
-              externalFixtureId: body.data.fixtureId,
-              matchId: mid,
-            },
-            gateway,
-            log,
-          );
-        } else {
-          log.warn(
-            { competitionId: parsed.data.competitionId, fixtureId: body.data.fixtureId },
-            "fixture statistics synced from API but match row has no id; skipping goal rollup job",
-          );
-        }
+      // Background: goal punten → player_points_rollup + teams.total_points (see fixture-goal-rollup-job).
+      const m = out.match as Record<string, unknown> | undefined;
+      const mid = m?.id != null ? Number(m.id) : NaN;
+      if (Number.isFinite(mid) && mid > 0) {
+        startFixtureGoalRollupBackground(
+          {
+            competitionId: parsed.data.competitionId,
+            externalFixtureId: body.data.fixtureId,
+          },
+          gateway,
+          log,
+        );
+      } else {
+        log.warn(
+          { competitionId: parsed.data.competitionId, fixtureId: body.data.fixtureId, source: out.source },
+          "fixture statistics response has no match id; skipping goal rollup job",
+        );
       }
       res.json(out);
     }),

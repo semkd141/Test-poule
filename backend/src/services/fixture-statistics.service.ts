@@ -72,26 +72,14 @@ export async function getOrSyncFixtureStatistics(
   const comp = await gateway.getCompetitionById(String(competitionId));
   if (!comp) throw new HttpError(404, "Competition not found");
 
-  const existing = await gateway.getMatchByCompetitionAndExternalFixture(competitionId, fixtureId);
+  const existing = await gateway.getMatchByExternalFixtureId(fixtureId);
   if (existing) {
-    let playersRaw = await gateway.listPlayerStatisticsByFixture(fixtureId);
-    let players = asPlayerRows(playersRaw);
-    if (
-      players.length === 0 &&
-      env.API_FOOTBALL_KEY &&
-      env.API_FOOTBALL_KEY.length >= 8
-    ) {
-      const api = new ApiFootballClient(env.API_FOOTBALL_KEY);
-      const item = await api.getFixtureResponseItemById(fixtureId);
-      const slimPlayers = await resolveSlimPlayersFromApi(api, fixtureId, item ?? {});
-      const statRows = playerStatisticsRowsFromSlim(fixtureId, slimPlayers);
-      if (statRows.length > 0) {
-        await gateway.deletePlayerStatisticsByFixture(fixtureId);
-        await gateway.insertPlayerStatisticsBatch(statRows);
-        playersRaw = await gateway.listPlayerStatisticsByFixture(fixtureId);
-        players = asPlayerRows(playersRaw);
-      }
+    const ecid = Number(existing.competition_id);
+    if (Number.isFinite(ecid) && ecid > 0 && ecid !== competitionId) {
+      /* Match row is global per external_fixture_id; URL competition may differ from row.competition_id. */
     }
+    const playersRaw = await gateway.listPlayerStatisticsByFixture(fixtureId);
+    const players = asPlayerRows(playersRaw);
     return {
       source: "database",
       match: existing,
@@ -120,8 +108,7 @@ export async function getOrSyncFixtureStatistics(
   let match = asMatchRow(firstUpsert);
   if (!match) {
     match =
-      (await gateway.getMatchByCompetitionAndExternalFixture(competitionId, fixtureId)) ??
-      (matchBody as FixtureStatisticsMatch);
+      (await gateway.getMatchByExternalFixtureId(fixtureId)) ?? (matchBody as FixtureStatisticsMatch);
   }
 
   const slimPlayers = await resolveSlimPlayersFromApi(api, fixtureId, item);
@@ -131,6 +118,7 @@ export async function getOrSyncFixtureStatistics(
   if (statRows.length > 0) {
     await gateway.insertPlayerStatisticsBatch(statRows);
   }
+  await gateway.patchMatchByExternalFixtureId(fixtureId, { applied: false });
 
   const playersRaw = await gateway.listPlayerStatisticsByFixture(fixtureId);
   return {

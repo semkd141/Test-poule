@@ -5,14 +5,12 @@ export type FixtureGoalRollupJobOpts = {
   competitionId: number;
   /** API-Football `fixtures.id` (same as `matches.external_fixture_id` / `player_statistics.fixture_id`). */
   externalFixtureId: number;
-  /** Internal `matches.id` for `participant_score_events.match_id`. */
-  matchId: number;
 };
 
 /**
- * After a first-time fixture statistics sync from API-Football, apply goal `punten` to every
- * `player_points_rollup` row for that pool + league + season + `player_id`, then refresh `teams.total_points`.
- * Idempotent per team per match via `participant_score_events` (`fixture_goals:p{playerId}`).
+ * After fixture statistics are loaded, apply goal `punten` from `player_statistics` to
+ * `player_points_rollup` (all rows for league + season + player_id), then refresh `teams.total_points`.
+ * Idempotent per fixture via `matches.applied` (no `participant_score_events`).
  */
 export function startFixtureGoalRollupBackground(
   opts: FixtureGoalRollupJobOpts,
@@ -41,15 +39,29 @@ function aggregateGoalPuntenByPlayerId(raw: unknown): Map<number, number> {
   return out;
 }
 
+function matchAppliedTrue(row: Record<string, unknown>): boolean {
+  const a = row.applied;
+  return a === true || a === "true" || a === 1 || a === "t";
+}
+
 async function runFixtureGoalRollupJob(
   opts: FixtureGoalRollupJobOpts,
   gateway: SupabaseGateway,
   log: AppLogger,
 ): Promise<void> {
-  const { competitionId, externalFixtureId, matchId } = opts;
+  const { competitionId, externalFixtureId } = opts;
   if (!Number.isFinite(competitionId) || competitionId <= 0) return;
   if (!Number.isFinite(externalFixtureId) || externalFixtureId <= 0) return;
-  if (!Number.isFinite(matchId) || matchId <= 0) return;
+
+  const matchRow = await gateway.getMatchByExternalFixtureId(externalFixtureId);
+  if (!matchRow) {
+    log.warn({ externalFixtureId }, "fixture goal rollup: no match row for fixture");
+    return;
+  }
+  if (matchAppliedTrue(matchRow)) {
+    log.info({ externalFixtureId }, "fixture goal rollup: matches.applied already true; skip");
+    return;
+  }
 
   const comp = await gateway.getCompetitionById(String(competitionId));
   if (!comp) {
@@ -70,16 +82,15 @@ async function runFixtureGoalRollupJob(
   }
 
   const teamsToRecompute = new Set<string>();
+  let patchedAnyRollup = false;
 
   for (const [playerId, punten] of byPlayer) {
-    const rollupsRaw = await gateway.listPlayerRollupsByCompetitionLeagueSeasonPlayer(
-      competitionId,
+    const rollupsRaw = await gateway.listPlayerRollupsByLeagueSeasonPlayer(
       scope.leagueId,
       scope.season,
       playerId,
     );
     const rollups = Array.isArray(rollupsRaw) ? rollupsRaw : [];
-    const eventKey = `fixture_goals:p${playerId}`;
 
     for (const rr of rollups) {
       if (!rr || typeof rr !== "object" || Array.isArray(rr)) continue;
@@ -90,13 +101,11 @@ async function runFixtureGoalRollupJob(
       if (!rollupId || !Number.isFinite(teamId) || teamId <= 0) continue;
 
       try {
-        const applied = await gateway.insertScoreEventIfMissing(teamId, matchId, eventKey, punten);
-        if (applied) {
-          await gateway.patchPlayerRollupById(rollupId, { points: curPts + punten });
-          teamsToRecompute.add(String(teamId));
-        }
+        await gateway.patchPlayerRollupById(rollupId, { points: curPts + punten });
+        patchedAnyRollup = true;
+        teamsToRecompute.add(String(teamId));
       } catch (e) {
-        log.error({ err: e, teamId, matchId, playerId, punten }, "fixture goal rollup: row failed");
+        log.error({ err: e, teamId, playerId, punten }, "fixture goal rollup: rollup patch failed");
       }
     }
   }
@@ -109,8 +118,12 @@ async function runFixtureGoalRollupJob(
     }
   }
 
+  if (patchedAnyRollup) {
+    await gateway.patchMatchByExternalFixtureId(externalFixtureId, { applied: true });
+  }
+
   log.info(
-    { competitionId, externalFixtureId, matchId, players: byPlayer.size, teams: teamsToRecompute.size },
+    { competitionId, externalFixtureId, players: byPlayer.size, teams: teamsToRecompute.size },
     "fixture goal rollup job finished",
   );
 }
