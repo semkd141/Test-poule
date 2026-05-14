@@ -11,14 +11,21 @@ export function createLogger(env: Env): AppLogger {
   const appLogStream = pino.destination({ dest: appLogPath, mkdir: true, sync: false });
   const errorLogStream = pino.destination({ dest: errorLogPath, mkdir: true, sync: false });
 
+  const streams = [
+    { stream: appLogStream },
+    { level: "error", stream: errorLogStream },
+  ];
+
+  // Add console output in development
+  if (env.NODE_ENV === "development") {
+    streams.push({ stream: pino.destination(1) });
+  }
+
   return pino(
     {
       level: env.LOG_LEVEL,
       base: { env: env.NODE_ENV },
     },
-    pino.multistream([
-      { stream: appLogStream },
-      { level: "error", stream: errorLogStream },
-    ]),
+    pino.multistream(streams),
   );
 }

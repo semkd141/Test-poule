@@ -41,3 +41,19 @@ function shutdown(signal: string) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("uncaughtException", (error) => {
+  logger.error({ error }, "uncaught exception");
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason, promise) => {
+  logger.error({ reason, promise }, "unhandled rejection");
+  process.exit(1);
+});
+
+server.on("error", (error: NodeJS.ErrnoException) => {
+  logger.error({ error }, "server error");
+  if (error.code === "EADDRINUSE") {
+    logger.error(`Port ${env.PORT} is already in use`);
+  }
+  process.exit(1);
+});
