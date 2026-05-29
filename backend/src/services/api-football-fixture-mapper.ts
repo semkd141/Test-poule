@@ -52,12 +52,18 @@ export function roundBucket(round: unknown): string {
   if (!r) return "unknown";
   if (r.includes("group stage") || /^group\b/.test(r)) return "group";
   if (
+    r.includes("round of 32") ||
+    r.includes("32nd finals") ||
+    /\b1\s*\/\s*16\b/.test(r)
+  )
+    return "r32";
+  if (
     r.includes("round of 16") ||
     r.includes("16th finals") ||
-    /\bl\s*\/\s*16\b/.test(r)
+    /\b1\s*\/\s*8\b/.test(r)
   )
     return "r16";
-  if (r.includes("quarter") || /\bqf\b/.test(r)) return "qr";
+  if (r.includes("quarter") || /\bqf\b/.test(r)) return "qf";
   if (r.includes("semi")) return "sf";
   if (r.includes("3rd place") || r.includes("third place")) return "tp";
   if (/^final\b/.test(r) || r.trim() === "final") return "final";
@@ -68,12 +74,14 @@ export function stageForBucket(bucket: string): string {
   switch (bucket) {
     case "group":
       return "group";
-    case "r16":
+    case "r32":
       return "r16";
-    case "qr":
-      return "qr";
-    case "sf":
+    case "r16":
+      return "qf";
+    case "qf":
       return "sf";
+    case "sf":
+      return "semi";
     case "tp":
       return "thirdp";
     case "final":
@@ -135,7 +143,7 @@ export function extractFixtureRow(
 }
 
 export function assignLocalKeys(rows: InternalRow[]): FixtureMappingInsertRow[] {
-  const order = ["group", "r16", "qr", "sf", "tp", "final", "unknown"] as const;
+  const order = ["group", "r32", "r16", "qf", "sf", "tp", "final", "unknown"] as const;
   const counters: Record<string, number> = Object.fromEntries(order.map((b) => [b, 0]));
 
   const byBucket: Record<string, InternalRow[]> = {};
@@ -154,25 +162,20 @@ export function assignLocalKeys(rows: InternalRow[]): FixtureMappingInsertRow[] 
         a._kickoff - c._kickoff || (a.api_fixture_id ?? 0) - (c.api_fixture_id ?? 0),
     );
 
-    if (b === "final") {
-      for (const row of list) {
-        counters.final = (counters.final ?? 0) + 1;
-        row.local_key = `f-${pad2(counters.final)}`;
-      }
-      continue;
-    }
-
     let prefix: string;
     if (b === "group") prefix = "gm";
-    else if (b === "r16") prefix = "r16";
-    else if (b === "qr") prefix = "qr";
-    else if (b === "sf") prefix = "sf";
-    else if (b === "tp") prefix = "tp";
+    else if (b === "r32") prefix = "r16";
+    else if (b === "r16") prefix = "qf";
+    else if (b === "qf") prefix = "sf";
+    else if (b === "sf") prefix = "semi";
+    else if (b === "tp") prefix = "thirdp";
+    else if (b === "final") prefix = "final";
     else prefix = "unk";
 
     for (const row of list) {
       counters[b] = (counters[b] ?? 0) + 1;
-      row.local_key = `${prefix}-${pad3(counters[b] ?? 0)}`;
+      const pad = b === "group" || b === "unknown" ? pad3 : pad2;
+      row.local_key = `${prefix}-${pad(counters[b] ?? 0)}`;
     }
   }
 

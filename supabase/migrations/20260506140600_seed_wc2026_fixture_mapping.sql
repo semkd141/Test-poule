@@ -1,6 +1,6 @@
 -- WC2026 fixture_mappings: group schedule from web-app/lib/wk/tournament.ts (GROUP_MATCHES).
 -- Kickoffs stored as Europe/Amsterdam wall time (+02) for June/July 2026 (matches poule UX).
--- local_key: gm-001..gm-073 (73 group games), r16-01..r16-16, qf-01..qf-08, sf-01..sf-04, thirdp-01, final-01
+-- local_key: gm-001..gm-073 (73 group games), r16-01..r16-16, qf-01..qf-08, sf-01..sf-04, semi-01..semi-02, thirdp-01, final-01
 -- Knockout rows keep teams/kickoff/location NULL until known; api_fixture_id filled later from API-Football.
 --
 -- Schema at this migration: competition_id + home_team/away_team (see 20260506140500).
@@ -118,6 +118,8 @@ v AS (
     ('sf-02','sf',NULL,NULL,NULL,NULL,NULL),
     ('sf-03','sf',NULL,NULL,NULL,NULL,NULL),
     ('sf-04','sf',NULL,NULL,NULL,NULL,NULL),
+    ('semi-01','semi',NULL,NULL,NULL,NULL,NULL),
+    ('semi-02','semi',NULL,NULL,NULL,NULL,NULL),
     ('thirdp-01','thirdp',NULL,NULL,NULL,NULL,NULL),
     ('final-01','final',NULL,NULL,NULL,NULL,NULL)
   ) AS t(local_key, stage, api_fixture_id, kickoff_at, home_team, away_team, location)

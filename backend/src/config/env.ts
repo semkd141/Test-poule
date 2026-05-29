@@ -66,7 +66,7 @@ const envSchema = z.object({
   ),
   CRON_SECRET: z.preprocess(
     (v) => (v === "" || v === undefined ? undefined : v),
-    z.string().min(8).optional(),
+    z.string().min(16).optional(),
   ),
   PARTICIPANT_LEGACY_OPEN_MUTATIONS: boolishLegacy,
   ADMIN_API_SECRET: z.preprocess(

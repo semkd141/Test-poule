@@ -141,6 +141,7 @@ export const KNOCKOUT = [
   { stage:"r16", matches:16 },
   { stage:"qf", matches:8 },
   { stage:"sf", matches:4 },
+  { stage:"semi", matches:2 },
   { stage:"thirdp", matches:1 },
   { stage:"final", matches:1 }
 ];

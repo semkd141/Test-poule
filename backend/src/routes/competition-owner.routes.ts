@@ -23,6 +23,7 @@ import {
   defaultApiFootballSeasonForLeagueType,
   parseApiFootballSeasonYearFromSeasonLabel,
 } from "../league-type-resolve.js";
+import { defaultPoolStartsAtForCompetition } from "../participant/competition-deadline.js";
 
 function ownerSub(req: Request): string {
   const s = req.supabaseUser?.sub;
@@ -174,6 +175,22 @@ function ensureMetadataApiFootballLeagueSeason(
   return base;
 }
 
+function resolveStartsAtForWrite(input: {
+  starts_at?: string | null | undefined;
+  slug?: unknown;
+  league_type?: unknown;
+  season_label?: unknown;
+  apiFootballSeason?: unknown;
+}): string {
+  if (input.starts_at != null && String(input.starts_at).trim()) {
+    const d = new Date(String(input.starts_at));
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+  const fallback = defaultPoolStartsAtForCompetition(input);
+  if (fallback) return new Date(fallback).toISOString();
+  throw new HttpError(400, "starts_at is required so team privacy and edit locking work correctly.");
+}
+
 async function requesterEmail(req: Request, gateway: SupabaseGateway): Promise<string | null> {
   const j = req.supabaseUser?.email;
   if (typeof j === "string" && j.trim()) return normEmail(j);
@@ -226,9 +243,15 @@ export function createCompetitionOwnerRouter(gateway: SupabaseGateway, env: Env,
         api_football_league_id: leagueFields.api_football_league_id,
         owner_user_id: sub,
         metadata: meta,
+        starts_at: resolveStartsAtForWrite({
+          starts_at: parsed.data.starts_at,
+          slug: parsed.data.slug,
+          league_type: leagueFields.league_type,
+          season_label: parsed.data.season_label,
+          apiFootballSeason: chosenSeason,
+        }),
       };
       if (parsed.data.season_label !== undefined) body.season_label = parsed.data.season_label;
-      if (parsed.data.starts_at !== undefined) body.starts_at = parsed.data.starts_at;
       const out = await gateway.createCompetition(body);
       res.status(201).json(out);
     }),
@@ -563,6 +586,31 @@ export function createCompetitionOwnerRouter(gateway: SupabaseGateway, env: Env,
         const lf = await resolvedLeagueFields(gateway, String(bodyRaw.league_type));
         body = { ...body, ...lf };
       }
+      if (bodyRaw.starts_at === null) {
+        throw new HttpError(400, "starts_at cannot be cleared because it controls team privacy and edit locking.");
+      }
+      const nextStartsAt = bodyRaw.starts_at ?? existing.starts_at;
+      if (
+        nextStartsAt == null ||
+        String(nextStartsAt).trim() === "" ||
+        bodyRaw.slug !== undefined ||
+        bodyRaw.league_type !== undefined ||
+        bodyRaw.season_label !== undefined
+      ) {
+        const nextLeagueType = body.league_type ?? existing.league_type;
+        const nextSeasonLabel = body.season_label ?? existing.season_label;
+        const labelSeason = parseApiFootballSeasonYearFromSeasonLabel(nextSeasonLabel);
+        const chosenSeason =
+          labelSeason ??
+          (typeof nextLeagueType === "string" ? defaultApiFootballSeasonForLeagueType(nextLeagueType) : undefined);
+        body.starts_at = resolveStartsAtForWrite({
+          starts_at: nextStartsAt as string | null | undefined,
+          slug: body.slug ?? existing.slug,
+          league_type: nextLeagueType,
+          season_label: nextSeasonLabel,
+          apiFootballSeason: chosenSeason,
+        });
+      }
       const out = await gateway.patchCompetition(id, body);
       res.json(out);
     }),
@@ -579,10 +627,19 @@ export function createCompetitionOwnerRouter(gateway: SupabaseGateway, env: Env,
       const parsed = competitionPutSchema.safeParse(req.body);
       if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
       const leagueFields = await resolvedLeagueFields(gateway, parsed.data.league_type);
+      const labelSeason = parseApiFootballSeasonYearFromSeasonLabel(parsed.data.season_label);
+      const chosenSeason = labelSeason ?? defaultApiFootballSeasonForLeagueType(leagueFields.league_type);
       const body = {
         ...parsed.data,
         ...leagueFields,
         slug: parsed.data.slug.trim().toLowerCase(),
+        starts_at: resolveStartsAtForWrite({
+          starts_at: parsed.data.starts_at,
+          slug: parsed.data.slug,
+          league_type: leagueFields.league_type,
+          season_label: parsed.data.season_label,
+          apiFootballSeason: chosenSeason,
+        }),
       };
       const out = await gateway.patchCompetition(id, body);
       res.json(out);

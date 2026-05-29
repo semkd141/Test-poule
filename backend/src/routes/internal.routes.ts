@@ -4,8 +4,8 @@ import type { AppLogger } from "../lib/logger.js";
 import type { SupabaseGateway } from "../services/supabase-gateway.js";
 import { HttpError } from "../shared/http-error.js";
 import { asyncHandler } from "../middleware/async-handler.js";
-import { ApiFootballClient, type ApiFootballFixture } from "../services/api-football-client.js";
-import { ScoringEngine } from "../services/scoring-engine.js";
+import { ApiFootballClient } from "../services/api-football-client.js";
+import { syncAndScoreCompetitionFixtures } from "../services/fantasy-scoring-sync.service.js";
 import { z } from "zod";
 import { isPlatformOperator } from "../auth/platform-operator.js";
 import {
@@ -13,6 +13,7 @@ import {
   defaultApiFootballSeasonForLeagueType,
   parseApiFootballSeasonYearFromSeasonLabel,
 } from "../league-type-resolve.js";
+import { defaultPoolStartsAtForCompetition } from "../participant/competition-deadline.js";
 import {
   FIXTURE_SQUAD_BATCH_BACKGROUND_MESSAGE,
   startFixtureSquadBackgroundBatch,
@@ -39,26 +40,20 @@ function ensureMetadataApiFootballLeagueSeason(
   return base;
 }
 
-type FixtureMapRow = {
-  id: number;
-  local_key: string;
-  api_fixture_id: number | null;
-};
-
-function toMatchPayload(competitionId: number, src: ApiFootballFixture): Record<string, unknown> {
-  return {
-    competition_id: competitionId,
-    external_fixture_id: src.fixture.id,
-    status: src.fixture.status?.short ?? "NS",
-    round: src.league?.round ?? null,
-    kickoff_at: src.fixture.date,
-    home_team: src.teams.home.name,
-    away_team: src.teams.away.name,
-    home_goals: src.goals.home,
-    away_goals: src.goals.away,
-    payload: src,
-    synced_at: new Date().toISOString(),
-  };
+function resolveStartsAtForWrite(input: {
+  starts_at?: string | null | undefined;
+  slug?: unknown;
+  league_type?: unknown;
+  season_label?: unknown;
+  apiFootballSeason?: unknown;
+}): string {
+  if (input.starts_at != null && String(input.starts_at).trim()) {
+    const d = new Date(String(input.starts_at));
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+  const fallback = defaultPoolStartsAtForCompetition(input);
+  if (fallback) return new Date(fallback).toISOString();
+  throw new HttpError(400, "starts_at is required so team privacy and edit locking work correctly.");
 }
 
 export function createInternalRouter(gateway: SupabaseGateway, env: Env, log: AppLogger): Router {
@@ -131,9 +126,15 @@ export function createInternalRouter(gateway: SupabaseGateway, env: Env, log: Ap
         league_type: leagueFields.league_type,
         api_football_league_id: leagueFields.api_football_league_id,
         metadata: meta,
+        starts_at: resolveStartsAtForWrite({
+          starts_at: parsed.data.starts_at,
+          slug: parsed.data.slug,
+          league_type: leagueFields.league_type,
+          season_label: parsed.data.season_label,
+          apiFootballSeason: chosenSeason,
+        }),
       };
       if (parsed.data.season_label !== undefined) body.season_label = parsed.data.season_label;
-      if (parsed.data.starts_at !== undefined) body.starts_at = parsed.data.starts_at;
       const out = await gateway.createCompetition(body);
       res.json(out);
     }),
@@ -145,6 +146,8 @@ export function createInternalRouter(gateway: SupabaseGateway, env: Env, log: Ap
       if (!isPlatformOperator(req, env)) throw new HttpError(401, "Invalid internal authorization");
       const id = String(req.params.id ?? "").trim();
       if (!id) throw new HttpError(400, "id required");
+      const existing = await gateway.getCompetitionById(id);
+      if (!existing) throw new HttpError(404, "Competition not found");
       const parsed = competitionPatchSchema.safeParse(req.body);
       if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
       const bodyRaw = parsed.data;
@@ -153,6 +156,31 @@ export function createInternalRouter(gateway: SupabaseGateway, env: Env, log: Ap
       if (bodyRaw.league_type !== undefined) {
         const lf = await resolvedLeagueFields(gateway, String(bodyRaw.league_type));
         body = { ...body, ...lf };
+      }
+      if (bodyRaw.starts_at === null) {
+        throw new HttpError(400, "starts_at cannot be cleared because it controls team privacy and edit locking.");
+      }
+      const nextStartsAt = bodyRaw.starts_at ?? existing.starts_at;
+      if (
+        nextStartsAt == null ||
+        String(nextStartsAt).trim() === "" ||
+        bodyRaw.slug !== undefined ||
+        bodyRaw.league_type !== undefined ||
+        bodyRaw.season_label !== undefined
+      ) {
+        const nextLeagueType = body.league_type ?? existing.league_type;
+        const nextSeasonLabel = body.season_label ?? existing.season_label;
+        const labelSeason = parseApiFootballSeasonYearFromSeasonLabel(nextSeasonLabel);
+        const chosenSeason =
+          labelSeason ??
+          (typeof nextLeagueType === "string" ? defaultApiFootballSeasonForLeagueType(nextLeagueType) : undefined);
+        body.starts_at = resolveStartsAtForWrite({
+          starts_at: nextStartsAt as string | null | undefined,
+          slug: body.slug ?? existing.slug,
+          league_type: nextLeagueType,
+          season_label: nextSeasonLabel,
+          apiFootballSeason: chosenSeason,
+        });
       }
       const out = await gateway.patchCompetition(id, body);
       res.json(out);
@@ -256,29 +284,12 @@ export function createInternalRouter(gateway: SupabaseGateway, env: Env, log: Ap
       const comp = await gateway.getCompetitionBySlug(competitionSlug);
       if (!comp?.id) throw new HttpError(404, `Competition not found: ${competitionSlug}`);
 
-      const competitionId = Number(comp.id);
-      const mappings = (await gateway.listFixtureMappings(competitionId)) as FixtureMapRow[];
-      const api = new ApiFootballClient(env.API_FOOTBALL_KEY);
-      let synced = 0;
-
-      for (const m of mappings) {
-        if (!m.api_fixture_id) continue;
-        const fx = await api.getFixtureById(Number(m.api_fixture_id));
-        if (!fx) continue;
-        const status = String(fx.fixture.status?.short ?? "");
-        if (!["FT", "AET", "PEN"].includes(status)) continue;
-        await gateway.upsertMatch(toMatchPayload(competitionId, fx));
-        synced += 1;
-      }
-
-      const scoring = new ScoringEngine(gateway);
-      const scoreRes = await scoring.scoreCompetition(competitionId);
+      const api = new ApiFootballClient(env.API_FOOTBALL_KEY, 6500);
+      const syncRes = await syncAndScoreCompetitionFixtures(gateway, api, comp, log);
       res.json({
         ok: true,
         competitionSlug,
-        syncedFixtures: synced,
-        scoredMatchesSeen: scoreRes.matches,
-        participantsTouched: scoreRes.participantsTouched,
+        ...syncRes,
       });
     }),
   );
