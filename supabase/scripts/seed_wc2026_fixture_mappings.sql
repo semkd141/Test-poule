@@ -118,6 +118,8 @@ v AS (
     ('sf-02','sf',NULL,NULL,NULL,NULL,NULL),
     ('sf-03','sf',NULL,NULL,NULL,NULL,NULL),
     ('sf-04','sf',NULL,NULL,NULL,NULL,NULL),
+    ('semi-01','semi',NULL,NULL,NULL,NULL,NULL),
+    ('semi-02','semi',NULL,NULL,NULL,NULL,NULL),
     ('thirdp-01','thirdp',NULL,NULL,NULL,NULL,NULL),
     ('final-01','final',NULL,NULL,NULL,NULL,NULL)
   ) AS t(local_key, stage, api_fixture_id, kickoff_at, team_1, team_2, location)

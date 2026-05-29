@@ -873,6 +873,34 @@ export class SupabaseGateway {
     }
   }
 
+  async upsertPlayerStatisticsBatch(
+    rows: Array<{
+      fixture_id: number;
+      land: string;
+      speler_naam: string;
+      player_id: number | null;
+      punten: number;
+    }>,
+  ): Promise<void> {
+    const CHUNK = 150;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const slice = rows.slice(i, i + CHUNK);
+      const r = await this.request(
+        "db.player_statistics.upsertBatch",
+        `${this.dbBase}/player_statistics?on_conflict=fixture_id,land,speler_naam`,
+        {
+          method: "POST",
+          headers: {
+            ...this.serviceHeaders(),
+            Prefer: "resolution=merge-duplicates,return=minimal",
+          },
+          body: JSON.stringify(slice),
+        },
+      );
+      await this.parseSuccessBody(r);
+    }
+  }
+
   async listScorableMatches(competitionId: number): Promise<unknown> {
     const r = await this.request(
       "db.matches.scorable",
@@ -909,6 +937,32 @@ export class SupabaseGateway {
     }
     const out = await this.parseSuccessBody(r);
     return Array.isArray(out) && out.length > 0;
+  }
+
+  async applyScoreEventAndIncrementRollupIfMissing(
+    participantId: number,
+    matchId: number,
+    eventKey: string,
+    deltaPoints: number,
+    rollupId: string,
+  ): Promise<boolean> {
+    const r = await this.request(
+      "db.rpc.applyPlayerScoreEvent",
+      `${this.dbBase}/rpc/apply_player_score_event`,
+      {
+        method: "POST",
+        headers: { ...this.serviceHeaders(), Prefer: "return=representation" },
+        body: JSON.stringify({
+          p_participant_id: participantId,
+          p_match_id: matchId,
+          p_event_key: eventKey,
+          p_delta_points: deltaPoints,
+          p_rollup_id: rollupId,
+        }),
+      },
+    );
+    const out = await this.parseSuccessBody(r);
+    return out === true;
   }
 
   async getCompetitionBySlug(slug: string): Promise<Record<string, unknown> | null> {

@@ -17,7 +17,7 @@ import {
 } from "../../../lib/wk/api-client";
 
 /** Full bracket order: group stage, then knockout (R16 → quarters → semis → third-place → final). */
-const TOURNAMENT_PHASE_ORDER = ["group", "r16", "qr", "qf", "sf", "thirdp", "final"];
+const TOURNAMENT_PHASE_ORDER = ["group", "r16", "qr", "qf", "sf", "semi", "thirdp", "final"];
 
 const KNOCKOUT_STAGE_ORDER = TOURNAMENT_PHASE_ORDER.filter(function (p) {
   return p !== "group";
@@ -64,6 +64,7 @@ function stageTitleKey(row) {
   if (lk.startsWith("qr-")) return "qr";
   if (lk.startsWith("qf-")) return "qf";
   if (lk.startsWith("sf-")) return "sf";
+  if (lk.startsWith("semi-")) return "semi";
   if (lk.startsWith("tp-") || lk.startsWith("thirdp-")) return "thirdp";
   if (lk.startsWith("f-") || lk.startsWith("final-")) return "final";
   return "";
@@ -78,6 +79,7 @@ function tournamentPhaseForSort(row) {
   if (lk.startsWith("qr-")) return "qr";
   if (lk.startsWith("qf-")) return "qf";
   if (lk.startsWith("sf-")) return "sf";
+  if (lk.startsWith("semi-")) return "semi";
   if (lk.startsWith("tp-") || lk.startsWith("thirdp-")) return "thirdp";
   if (lk.startsWith("final-") || lk.startsWith("f-")) return "final";
   const st = String(row.stage || "").toLowerCase();
@@ -87,6 +89,7 @@ function tournamentPhaseForSort(row) {
     st === "qr" ||
     st === "qf" ||
     st === "sf" ||
+    st === "semi" ||
     st === "thirdp" ||
     st === "final"
   ) {

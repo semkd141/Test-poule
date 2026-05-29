@@ -1,4 +1,5 @@
 const DEFAULT_DEADLINE_ISO = "2026-06-10T23:59:59+02:00";
+export const WC2026_POOL_START_ISO = "2026-06-11T18:00:00+02:00";
 
 function asRecord(raw: unknown): Record<string, unknown> | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -67,7 +68,7 @@ export function extractDeadlineLabelFromConfigSpelers(spelers: unknown): string 
 
 /**
  * Registration closes when the pool's scheduled start (`competitions.starts_at`) is reached.
- * If `starts_at` is unset, registration stays open.
+ * If `starts_at` is unset, registration stays open; writes should prevent that state.
  */
 export function isRegistrationClosedByPoolStart(
   competition: Record<string, unknown> | null,
@@ -81,15 +82,32 @@ export function isRegistrationClosedByPoolStart(
   return nowMs >= d.getTime();
 }
 
-/** Other users' squads stay hidden until the pool start time (when `starts_at` is set). */
+/** Other users' squads stay hidden until the pool start time; missing/invalid config fails closed. */
 export function shouldRedactSquadsBeforePoolStart(
   competitionStartsAt: string | null | undefined,
   nowMs = Date.now(),
 ): boolean {
   if (competitionStartsAt === undefined || competitionStartsAt === null || String(competitionStartsAt).trim() === "") {
-    return false;
+    return true;
   }
   const d = new Date(String(competitionStartsAt));
-  if (Number.isNaN(d.getTime())) return false;
+  if (Number.isNaN(d.getTime())) return true;
   return nowMs < d.getTime();
+}
+
+export function defaultPoolStartsAtForCompetition(input: {
+  slug?: unknown;
+  league_type?: unknown;
+  season_label?: unknown;
+  apiFootballSeason?: unknown;
+}): string | null {
+  const slug = typeof input.slug === "string" ? input.slug.trim().toLowerCase() : "";
+  const leagueType = typeof input.league_type === "string" ? input.league_type.trim().toLowerCase() : "";
+  const label = input.season_label != null ? String(input.season_label) : "";
+  const season = Number(input.apiFootballSeason);
+  const isWc2026 =
+    slug === "wc2026" ||
+    ((leagueType === "world_cup" || leagueType.startsWith("world_cup")) &&
+      (label.includes("2026") || season === 2026 || !label.trim()));
+  return isWc2026 ? WC2026_POOL_START_ISO : null;
 }

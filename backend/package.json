@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "nodemon",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "smoke:fantasy": "tsx src/scripts/fantasy-scoring-smoke.ts",
+    "test:fantasy-sync": "tsx src/scripts/fantasy-sync-mock-production.ts",
+    "test:privacy-deadline": "tsx src/scripts/privacy-deadline-smoke.ts"
   },
   "keywords": [],
   "author": "",
